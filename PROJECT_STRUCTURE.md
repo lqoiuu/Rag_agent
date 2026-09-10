@@ -52,7 +52,7 @@ rag-agent-assistant/
 | .env.example | 声明允许使用的环境变量名称 | 提供配置模板，不包含真实密钥 |
 | .gitignore | 定义 Git 排除规则 | 防止提交密钥、虚拟环境、缓存、日志和本地数据库 |
 | PROJECT_STRUCTURE.md | 保存真实项目结构和职责说明 | 用户要求同步结构时由 Codex 更新 |
-| README.md | 说明项目定位、当前能力和边界 | 不保存阶段操作流程 |
+| README.md | 说明项目定位、可复现的环境重建步骤、当前能力和边界 | 不保存阶段操作流程 |
 | pyproject.toml | 定义项目、Python 范围、直接依赖和工具配置 | uv、pytest、Ruff 和 mypy 的共同配置入口 |
 | uv.lock | 锁定完整依赖图 | 保证不同环境安装相同版本 |
 
@@ -86,22 +86,22 @@ rag-agent-assistant/
 
 ## 当前阶段
 
-阶段 1：Python 3.13 工程骨架与环境。
+阶段 1（Python 3.13 工程骨架与环境）已完成并通过验收；阶段 2（模型适配层与最小问答）尚未开始。
 
-已经获得的实际证据：
+阶段 1 验收证据（2026-09-10 实际执行）：
 
-- 项目 Git 仓库已初始化。
-- 项目专属 Python 3.13.15 虚拟环境已创建并激活。
-- uv.lock 已生成，核心依赖已经安装。
-- rag-agent health 已返回 ok。
-- 修改健康检查前的测试结果为 3 passed。
+- Python 3.13.15，解释器为项目内 `.venv`，由 uv 创建。
+- `uv sync --locked`：Resolved 111 packages / Checked 109 packages，锁文件与 pyproject.toml 一致且未被修改。
+- `rag-agent health`：`status` 为 `ok`，五项检查全部为 true，五个核心模块导入全部为 ok。
+- 锁定依赖版本：chromadb 1.5.9、langchain 1.4.0、langchain-chroma 1.1.0、langgraph 1.2.11、pydantic-settings 2.15.0。
+- `pytest`：3 passed。
+- `ruff check`：All checks passed；`ruff format --check`：15 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 7 source files。
+- Git：`522d030` 建立工程骨架，`cc0b9b9` 补充 README 环境重建说明，工作区干净。
 
-尚未获得的最新证据：
+已知环境注意事项：
 
-- 健康检查合并修改后的 pytest 结果。
-- Ruff 修复后的复查结果。
-- mypy 类型检查结果。
-- 阶段 1 的首次 Git 提交。
+- 在 DSH 沙箱内运行 pytest 时，pytest 会通过 `tempfile.mkdtemp()` 创建缓存目录（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`），该目录随后无法被沙箱进程访问或删除，并遗留 `pytest-cache-files-*` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
 
 ## 当前已实现能力
 
@@ -112,6 +112,7 @@ rag-agent-assistant/
 - JSON 结构化日志。
 - 环境与核心依赖健康检查。
 - 最小单元测试。
+- 可复现的环境重建说明（Python 版本、uv sync、健康检查和质量工具命令）。
 
 ## 尚未实现
 
