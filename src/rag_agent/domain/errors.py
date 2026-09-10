@@ -54,6 +54,12 @@ class CorruptedDocumentError(IngestionError):
     code = "corrupted_document"
 
 
+class ChunkingError(IngestionError):
+    """A splitter returned text that cannot be traced back to its source."""
+
+    code = "chunking_error"
+
+
 class MissingDependencyError(IngestionError):
     """An optional parser dependency is not installed."""
 

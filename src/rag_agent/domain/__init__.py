@@ -14,6 +14,7 @@ from rag_agent.domain.documents import (
     version_of,
 )
 from rag_agent.domain.errors import (
+    ChunkingError,
     CorruptedDocumentError,
     DocumentNotFoundError,
     EmptyDocumentError,
@@ -26,6 +27,7 @@ from rag_agent.domain.errors import (
 
 __all__ = [
     "SUFFIX_TO_FILE_TYPE",
+    "ChunkingError",
     "CorruptedDocumentError",
     "DocumentChunk",
     "DocumentNotFoundError",
