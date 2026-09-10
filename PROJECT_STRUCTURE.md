@@ -36,9 +36,17 @@ rag-agent-assistant/
 │       │   ├── __init__.py
 │       │   ├── providers.py
 │       │   └── settings.py
+│       ├── domain/
+│       │   ├── __init__.py
+│       │   ├── documents.py
+│       │   └── errors.py
 │       ├── generation/
 │       │   ├── __init__.py
 │       │   └── minimal_qa.py
+│       ├── ingestion/
+│       │   ├── __init__.py
+│       │   ├── loaders.py
+│       │   └── normalize.py
 │       ├── observability/
 │       │   ├── __init__.py
 │       │   └── logging.py
@@ -52,9 +60,16 @@ rag-agent-assistant/
     │   └── test_qwen_live.py
     └── unit/
         ├── model_test_support.py
+        ├── pdf_fixtures.py
+        ├── test_cli_ask.py
+        ├── test_documents.py
         ├── test_fake_providers.py
         ├── test_health.py
+        ├── test_loaders.py
+        ├── test_loaders_pdf.py
+        ├── test_logging.py
         ├── test_minimal_chain.py
+        ├── test_normalize.py
         ├── test_provider_errors.py
         ├── test_provider_factory.py
         ├── test_qwen_adapter.py
@@ -79,32 +94,45 @@ rag-agent-assistant/
 | 文件 | 职责 | 涉及知识 |
 |---|---|---|
 | src/rag_agent/__init__.py | 声明 rag_agent Python 包并提供版本号 | 包、模块、包元数据 |
-| src/rag_agent/__main__.py | 提供 rag-agent 命令入口 | 命令行参数、进程退出码 |
+| src/rag_agent/__main__.py | 提供 `rag-agent health` 与 `rag-agent ask` 命令入口，模型错误返回退出码 2 | 命令行参数、进程退出码、错误到退出码的映射 |
 | src/rag_agent/health.py | 集中检查 Python、虚拟环境、依赖和核心模块导入 | 运行环境、依赖元数据、模块导入 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
 | src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时和重试参数 | Pydantic、环境配置、路径稳定性 |
 | src/rag_agent/config/providers.py | 依据 Settings 组装通义千问聊天与 Embedding 实例，缺密钥时在发请求前失败 | 依赖注入、组装与配置边界 |
+| src/rag_agent/domain/__init__.py | 对外暴露领域模型与摄取错误 | 包的公共 API |
+| src/rag_agent/domain/documents.py | 定义 FileType、DocumentStatus、DocumentPage、SourceDocument、DocumentChunk，以及稳定文档 ID、校验值和版本派生 | 领域模型、稳定标识、内容版本 |
+| src/rag_agent/domain/errors.py | 定义七类带稳定 code 的摄取错误 | 错误隔离、异常设计 |
+| src/rag_agent/ingestion/__init__.py | 对外暴露加载与规范化接口 | 模块边界 |
+| src/rag_agent/ingestion/normalize.py | 识别编码并规范化文本：BOM 嗅探、编码回退、换行与控制字符处理、空行折叠、幂等保证 | 字符编码、文本规范化、幂等性 |
+| src/rag_agent/ingestion/loaders.py | 把 TXT、Markdown 和 PDF 加载为 SourceDocument，批量失败隔离、重复内容标记与目录枚举 | Document Loader、错误隔离、批量一致性 |
+| src/rag_agent/generation/__init__.py | 对外暴露最小问答链路接口 | 模块边界 |
+| src/rag_agent/generation/minimal_qa.py | 用 LCEL 组装 Prompt -> Model -> Parser，并返回带模型证据的结构化答案 | LCEL、Runnable 协议、结构化输出 |
+| src/rag_agent/observability/__init__.py | 对外暴露日志配置接口 | 模块边界 |
+| src/rag_agent/observability/logging.py | 输出 JSON 结构化日志，并把 httpx 的 INFO 日志降为 WARNING | Python logging、结构化数据、异常记录 |
 | src/rag_agent/providers/__init__.py | 对外暴露协议、错误类型、真实实现和 Fake 实现 | 模块边界、公共 API |
 | src/rag_agent/providers/base.py | 定义 ChatMessage、ChatResponse、EmbeddingResponse 等值对象和 ChatModel、EmbeddingModel 协议，以及七类模型错误 | 依赖倒置、结构化类型、错误分类 |
 | src/rag_agent/providers/qwen.py | 通过 httpx 调用 DashScope OpenAI 兼容端点，实现超时、指数退避重试、状态码分类、耗时与 token 记录 | HTTP 客户端、重试策略、密钥外置 |
 | src/rag_agent/providers/fake.py | 提供脚本化 FakeChatModel 和确定性 FakeEmbeddingModel | 测试替身、确定性测试 |
-| src/rag_agent/generation/__init__.py | 对外暴露最小问答链路接口 | 模块边界 |
-| src/rag_agent/generation/minimal_qa.py | 用 LCEL 组装 Prompt -> Model -> Parser，并返回带模型证据的结构化答案 | LCEL、Runnable 协议、结构化输出 |
-| src/rag_agent/observability/__init__.py | 对外暴露日志配置接口 | 模块边界 |
-| src/rag_agent/observability/logging.py | 输出 JSON 结构化日志 | Python logging、结构化数据、异常记录 |
 
 ## 测试
 
 | 文件 | 验证内容 |
 |---|---|
-| tests/unit/model_test_support.py | 共享的无网络测试辅助：脚本化 HTTP 传输、模型构造器和响应构造器 |
+| tests/unit/model_test_support.py | 无网络测试辅助：脚本化 HTTP 传输、模型构造器和响应构造器 |
+| tests/unit/pdf_fixtures.py | 自行组装对象与交叉引用表的最小 PDF 构造器，不依赖 pypdf 修复破损文件 |
 | tests/unit/test_health.py | Python 3.13、项目虚拟环境、依赖安装和核心模块导入 |
 | tests/unit/test_settings.py | 相对路径解析、模型配置默认值与环境变量覆盖、非法值被拒和密钥可选性 |
+| tests/unit/test_logging.py | JSON 日志格式、handler 幂等安装、httpx 日志降级和异常信息记录 |
 | tests/unit/test_fake_providers.py | Fake 模型的响应顺序、消息记录、异常注入、Embedding 确定性与边界校验 |
 | tests/unit/test_provider_errors.py | 状态码到错误类型的映射、重试次数、不可重试错误、错误信息不泄露密钥 |
 | tests/unit/test_qwen_adapter.py | 请求 URL、鉴权头、请求体、响应解析、批次数与维度校验、客户端所有权 |
 | tests/unit/test_provider_factory.py | 配置到模型实例的组装：模型名、base_url、重试上限和缺密钥行为 |
 | tests/unit/test_minimal_chain.py | 提示词渲染、结构化答案证据、链路复用和协议可替换性 |
+| tests/unit/test_cli_ask.py | ask 命令的成功输出、用法错误、供应商错误到退出码的映射 |
+| tests/unit/test_documents.py | 文件类型映射、稳定文档 ID、内容版本、状态派生、不可变性和分片 ID |
+| tests/unit/test_normalize.py | 解码回退、BOM、控制字符、空行折叠、NBSP 和规范化幂等性 |
+| tests/unit/test_loaders.py | 文本加载、来源相对路径、六类边界错误、批量失败隔离、重复标记和目录枚举 |
+| tests/unit/test_loaders_pdf.py | PDF 多页提取、无文本、加密和损坏文件，需要 pypdf |
 | tests/integration/test_qwen_live.py | 真实模型联网调用与 Embedding 维度一致性，默认跳过 |
 
 ## 稳定设计文档
@@ -123,6 +151,8 @@ rag-agent-assistant/
 
 阶段 2（模型适配层与最小问答）已完成并通过验收，含真实模型联网验证。
 
+阶段 3（文档加载与规范化）已完成并通过验收。
+
 阶段 1 证据（2026-09-10 实际执行）：
 
 - Python 3.13.15，解释器为项目内 `.venv`，由 uv 创建。
@@ -135,17 +165,26 @@ rag-agent-assistant/
 
 - 代码与配置提交：`fc14919`。
 - `pytest`：58 passed, 2 skipped（跳过的是需要联网和密钥的集成测试）。
-- `ruff check`：All checks passed；`ruff format --check`：23 files already formatted。
-- `mypy`（strict，files = ["src"]）：Success: no issues found in 14 source files。
-- `rag-agent health`：`status` 仍为 `ok`，新增导入链未破坏命令行入口。
+- `mypy`（strict）：Success: no issues found in 14 source files。
 - `uv.lock` 已同步 httpx 直接依赖（`>=0.28,<1`）。
 - 锁定依赖版本：chromadb 1.5.9、langchain 1.4.0、langchain-chroma 1.1.0、langgraph 1.2.11、pydantic-settings 2.15.0。
-- 真实模型联网验证（2026-09-10 实际执行）：`RAG_AGENT_RUN_LIVE_TESTS=1` 下 `pytest tests/integration` 为 2 passed in 3.90s；最小链路真实调用返回 `model=qwen-plus`、`latency_ms=1323`、`attempts=1`。
-- 验收对照：真实模型可以回答固定问题；无网络环境依靠 Fake Model 稳定运行全部核心测试（58 passed, 2 skipped）。
+- 真实模型联网验证：`RAG_AGENT_RUN_LIVE_TESTS=1` 下 `pytest tests/integration` 为 2 passed in 3.90s；最小链路真实调用返回 `model=qwen-plus`、`latency_ms=1323`、`attempts=1`。
+- Git：`29b1590` 同步结构文档与 README，`fa45a09` 记录 ADR-0002 与阶段结论。
+
+阶段 3 证据（2026-09-10 实际执行）：
+
+- 代码与配置提交：`b641ebc`。
+- `pytest`（学习者在本地执行）：101 passed, 2 skipped in 2.20s，其中四个 PDF 用例首次真实执行并通过。
+- `ruff check`：All checks passed；`ruff format --check`：36 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 20 source files。
+- 真实模型验证：`rag-agent ask "扫地机器人充不进电时应该先检查什么。"` 返回 `status=ok`、`model=qwen-plus`、`latency_ms=1244.1`、`attempts=1`、`prompt_tokens=64`、`completion_tokens=33`。
+- `uv.lock` 已同步 pypdf 6.18.0。
+- 提交后追加了 `tests/unit/test_logging.py`（四个用例，沙箱内已通过），本机完整套件预期为 105 passed, 2 skipped。
+- 已知限制：编码检测是启发式的，`gb18030` 先于 `big5` 尝试，个别在两种编码下都合法的字节序列会被解成错字而不报错。
 
 已知环境注意事项：
 
-- 在 DSH 沙箱内运行 pytest 时，pytest 会通过 `tempfile.mkdtemp()` 创建缓存目录（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`），该目录随后无法被沙箱进程访问或删除，并遗留 `pytest-cache-files-*` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
+- 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
 
 ## 当前已实现能力
 
@@ -155,16 +194,20 @@ rag-agent-assistant/
 - 项目根目录相对路径转绝对路径。
 - JSON 结构化日志。
 - 环境与核心依赖健康检查。
-- 最小单元测试。
 - 可复现的环境重建说明（Python 版本、uv sync、健康检查和质量工具命令）。
 - 供应商无关的聊天与 Embedding Provider 协议，以及通义千问适配器。
 - 模型调用的超时、重试、错误分类、耗时和 token 用量记录。
 - 无网络、无密钥即可运行的 Fake Chat 与 Fake Embedding。
 - 由 Settings 组装的模型实例，以及最小 Prompt -> Model -> Parser 问答链路。
+- `rag-agent ask "问题"` 命令行问答，输出结构化 JSON。
+- TXT、Markdown 和 PDF 文档加载，PDF 保留真实页码。
+- 编码识别与文本规范化，规范化结果幂等。
+- 稳定文档 ID、内容校验值与版本，可追溯每个文档的来源。
+- 批量加载的失败隔离、重复内容标记与目录枚举。
 
 ## 尚未实现
 
-- 文档解析、清洗和分片。
+- 文档清洗与分片，以及 chunk 参数实验（阶段 4）。
 - Chroma 向量写入、持久化和增量索引。
 - 语义检索、低置信度拒答和来源引用。
 - 用户、设备、订单和工单工具。
@@ -173,12 +216,11 @@ rag-agent-assistant/
 
 ## 最近结构变化
 
-本次同步（阶段 2）相对上一次的主要变化：
+本次同步（阶段 3）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/providers/`，承载协议、通义千问适配器和 Fake 实现。
-- 新增 `src/rag_agent/generation/`，承载最小 LCEL 问答链路。
-- 新增 `src/rag_agent/config/providers.py`，把 Settings 到模型实例的组装集中到配置层。
-- 新增 `tests/integration/`，用于默认跳过的真实联网验证。
-- `tests/unit/` 新增四个模型层测试文件和一个共享测试辅助模块。
-- `pyproject.toml` 增加 httpx 直接依赖和中文标点白名单。
-- 新增 `docs/adr/0002-provider-layer.md`，记录模型接入层的实现方式与取舍。
+- 新增 `src/rag_agent/domain/`，承载文档领域模型与摄取错误类型。
+- 新增 `src/rag_agent/ingestion/`，承载编码识别、文本规范化与文件加载器。
+- `src/rag_agent/__main__.py` 新增 `ask` 子命令。
+- `src/rag_agent/observability/logging.py` 把 httpx 的 INFO 日志降为 WARNING。
+- `tests/unit/` 新增五个测试文件和一个最小 PDF 构造辅助。
+- `pyproject.toml` 与 `uv.lock` 增加 pypdf 直接依赖。

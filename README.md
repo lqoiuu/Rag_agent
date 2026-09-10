@@ -2,7 +2,7 @@
 
 这是一个面向扫地机器人售后场景的学习与作品集项目。知识资料可以来自有权使用的说明书、维修手册和 FAQ；用户、设备、订单及工单接口均为本地模拟实现，不代表真实企业系统。
 
-当前状态：阶段 2（模型适配层与最小问答）已完成并通过验收，含真实模型联网验证。
+当前状态：阶段 3（文档加载与规范化）已完成并通过验收。
 
 ## 当前技术基线
 
@@ -10,6 +10,7 @@
 - uv 与 pyproject.toml 管理项目和依赖
 - LangChain、LangGraph、Chroma
 - 通义千问，通过 DashScope 的 OpenAI 兼容端点经 httpx 调用
+- pypdf 解析 PDF 文本
 - pydantic-settings
 - pytest、Ruff、mypy
 
@@ -54,10 +55,15 @@ uv sync
 - 模型调用的超时、重试、错误分类、耗时和 token 用量记录。
 - 无网络、无密钥即可运行的 Fake Model 与 Fake Embedding。
 - 由配置组装的模型实例，以及最小 Prompt -> Model -> Parser 问答链路。
+- `rag-agent ask "问题"` 命令行问答，输出结构化 JSON，模型错误返回退出码 2。
+- TXT、Markdown 和 PDF 文档加载，PDF 保留真实页码。
+- 编码识别与文本规范化，规范化结果幂等。
+- 稳定文档 ID、内容校验值与版本，可追溯每份资料的来源。
+- 批量加载的失败隔离、重复内容标记与目录枚举。
 
 ## 尚未实现
 
-- 文档解析、分片、向量入库和检索。
+- 文档清洗与分片，以及向量入库和检索。
 - LangGraph Agent 工作流。
 - Streamlit 页面。
 
