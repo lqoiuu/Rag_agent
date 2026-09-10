@@ -6,8 +6,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from rag_agent.providers.qwen import (
+    DEFAULT_BASE_URL,
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT_SECONDS,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -28,6 +36,11 @@ class Settings(BaseSettings):
     chroma_dir: Path = Path("data/chroma")
     sqlite_path: Path = Path("data/rag_agent.sqlite3")
     qwen_api_key: SecretStr | None = None
+    qwen_base_url: str = Field(default=DEFAULT_BASE_URL, min_length=1)
+    qwen_chat_model: str = Field(default=DEFAULT_CHAT_MODEL, min_length=1)
+    qwen_embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, min_length=1)
+    model_timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, gt=0)
+    model_max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0)
 
     @field_validator("data_dir", "chroma_dir", "sqlite_path", mode="before")
     @classmethod

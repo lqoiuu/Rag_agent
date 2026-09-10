@@ -1,0 +1,55 @@
+"""Model provider contracts and their concrete implementations."""
+
+from rag_agent.providers.base import (
+    ChatMessage,
+    ChatModel,
+    ChatResponse,
+    ChatRole,
+    ChatUsage,
+    EmbeddingModel,
+    EmbeddingResponse,
+    ModelAuthError,
+    ModelConnectionError,
+    ModelError,
+    ModelRateLimitError,
+    ModelRequestError,
+    ModelResponseError,
+    ModelServerError,
+    ModelTimeoutError,
+)
+from rag_agent.providers.fake import ChatResponder, FakeChatModel, FakeEmbeddingModel
+from rag_agent.providers.qwen import (
+    DEFAULT_BASE_URL,
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    QwenChatModel,
+    QwenEmbeddingModel,
+    RetryPolicy,
+)
+
+__all__ = [
+    "DEFAULT_BASE_URL",
+    "DEFAULT_CHAT_MODEL",
+    "DEFAULT_EMBEDDING_MODEL",
+    "ChatMessage",
+    "ChatModel",
+    "ChatResponder",
+    "ChatResponse",
+    "ChatRole",
+    "ChatUsage",
+    "EmbeddingModel",
+    "EmbeddingResponse",
+    "FakeChatModel",
+    "FakeEmbeddingModel",
+    "ModelAuthError",
+    "ModelConnectionError",
+    "ModelError",
+    "ModelRateLimitError",
+    "ModelRequestError",
+    "ModelResponseError",
+    "ModelServerError",
+    "ModelTimeoutError",
+    "QwenChatModel",
+    "QwenEmbeddingModel",
+    "RetryPolicy",
+]

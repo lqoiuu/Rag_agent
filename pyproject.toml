@@ -14,6 +14,7 @@ authors = [
 ]
 dependencies = [
     "chromadb>=1,<2",
+    "httpx>=0.28,<1",
     "langchain>=1,<2",
     "langchain-chroma>=1,<2",
     "langgraph>=1,<2",
@@ -43,6 +44,9 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Chinese full-width punctuation is intentional in prompts, log messages and
+# docstrings; RUF001 treats it as confusable with ASCII punctuation.
+allowed-confusables = ["，", "；", "？", "：", "（", "）"]
 
 [tool.ruff.format]
 quote-style = "double"
