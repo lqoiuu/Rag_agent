@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import uuid4
+
+import chromadb
 
 from rag_agent.domain.documents import (
     DocumentChunk,
@@ -15,6 +18,21 @@ from rag_agent.domain.documents import (
     version_of,
 )
 from rag_agent.ingestion.splitters import TextSplitter
+from rag_agent.vectorstore import ChunkVectorStore
+
+
+def make_vector_store() -> ChunkVectorStore:
+    """Return an isolated in-memory vector store.
+
+    Every store gets its own collection because one Chroma client per process
+    shares the same in-memory system, and a collection is bound to the vector
+    dimension it was first created with.
+    """
+
+    return ChunkVectorStore(
+        client=chromadb.EphemeralClient(),
+        collection_name=f"test-chunks-{uuid4().hex[:8]}",
+    )
 
 
 def make_document(
@@ -59,4 +77,22 @@ def make_chunks(*lengths: int) -> tuple[DocumentChunk, ...]:
             char_range=(0, length),
         )
         for index, length in enumerate(lengths, start=1)
+    )
+
+
+def make_document_chunks(
+    document_id: str, *contents: str, source: str = "raw/manual.md"
+) -> tuple[DocumentChunk, ...]:
+    """Build chunks that belong to one document, in order."""
+
+    return tuple(
+        DocumentChunk(
+            chunk_id=build_chunk_id(document_id, index),
+            document_id=document_id,
+            source=source,
+            content=content,
+            index=index,
+            char_range=(0, len(content)),
+        )
+        for index, content in enumerate(contents, start=1)
     )

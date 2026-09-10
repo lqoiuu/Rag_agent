@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from pathlib import Path
 
-from rag_agent.config import build_chat_model
+from rag_agent.config import build_chat_model, build_embedding_model, get_settings
+from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
 from rag_agent.generation import answer_question
 from rag_agent.health import collect_health
@@ -14,25 +17,38 @@ from rag_agent.ingestion import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     ChunkingConfig,
+    IngestResult,
+    ingest_directory,
+    ingest_path,
     load_document,
+    raw_directory,
+    remove_document,
     split_document,
     summarize_chunks,
+    sync_index,
 )
 from rag_agent.observability.logging import configure_logging
-from rag_agent.providers.base import ModelError
+from rag_agent.providers.base import EmbeddingModel, ModelError
+from rag_agent.storage import MetadataStore
+from rag_agent.vectorstore import ChunkVectorStore
+
+EXIT_OK = 0
+EXIT_PARTIAL_FAILURE = 1
+EXIT_ERROR = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rag-agent")
     parser.add_argument(
         "command",
-        choices=("health", "ask", "chunk-report"),
+        choices=("health", "ask", "chunk-report", "ingest", "reindex", "delete-document"),
         help="Command to execute.",
     )
     parser.add_argument(
         "argument",
         nargs="?",
-        help='Question text for "ask", or a file path for "chunk-report".',
+        help='Question text for "ask", a file path for "chunk-report", a path for '
+        '"ingest", or a stored source label for "delete-document".',
     )
     parser.add_argument(
         "--chunk-sizes",
@@ -43,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--chunk-overlaps",
         default="",
         help="Comma separated chunk overlaps for chunk-report, for example 0,80.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-index documents even when the stored version is unchanged.",
     )
     return parser
 
@@ -59,12 +80,12 @@ def _ask(question: str) -> int:
             answer = answer_question(model, question)
     except ModelError as exc:
         _error_payload(exc.code, str(exc))
-        return 2
+        return EXIT_ERROR
 
     payload = answer.model_dump()
     payload["latency_ms"] = round(answer.latency_ms, 1)
     print(json.dumps({"status": "ok", **payload}, ensure_ascii=False, indent=2))
-    return 0
+    return EXIT_OK
 
 
 def _parse_values(raw: str, default: int) -> tuple[int, ...]:
@@ -91,10 +112,10 @@ def _chunk_report(path: str, chunk_sizes: str, chunk_overlaps: str) -> int:
         ]
     except IngestionError as exc:
         _error_payload(exc.code, str(exc))
-        return 2
+        return EXIT_ERROR
     except (OSError, ValueError) as exc:
         _error_payload("invalid_argument", str(exc))
-        return 2
+        return EXIT_ERROR
 
     print(
         json.dumps(
@@ -109,7 +130,107 @@ def _chunk_report(path: str, chunk_sizes: str, chunk_overlaps: str) -> int:
             indent=2,
         )
     )
-    return 0
+    return EXIT_OK
+
+
+@contextmanager
+def _open_index(
+    settings: Settings,
+) -> Iterator[tuple[MetadataStore, ChunkVectorStore, EmbeddingModel]]:
+    """Open the metadata store and the vector store for one command."""
+
+    with MetadataStore(settings.sqlite_path) as store:
+        vectors = ChunkVectorStore(settings.chroma_dir)
+        with build_embedding_model(settings) as model:
+            yield store, vectors, model
+
+
+def _resolved_root(path: Path, settings: Settings) -> Path | None:
+    """Use the raw directory as source root only when the file lives inside it."""
+
+    raw_dir = raw_directory(settings.data_dir)
+    try:
+        path.resolve().relative_to(raw_dir.resolve())
+    except ValueError:
+        return None
+    return raw_dir
+
+
+def _report_results(payload: dict[str, object], results: Sequence[IngestResult]) -> int:
+    failures = [result for result in results if not result.ok]
+    print(
+        json.dumps(
+            {
+                "status": "ok" if not failures else "partial",
+                **payload,
+                "results": [result.as_dict() for result in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return EXIT_OK if not failures else EXIT_PARTIAL_FAILURE
+
+
+def _ingest(path: str, *, force: bool) -> int:
+    target = Path(path)
+    settings = get_settings()
+    try:
+        with _open_index(settings) as (store, vectors, model):
+            if target.is_dir():
+                results = ingest_directory(
+                    target, store=store, vectors=vectors, embedding_model=model, force=force
+                )
+            else:
+                results = (
+                    ingest_path(
+                        target,
+                        store=store,
+                        vectors=vectors,
+                        embedding_model=model,
+                        root=_resolved_root(target, settings),
+                        force=force,
+                    ),
+                )
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except IngestionError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+
+    return _report_results({"target": str(target)}, results)
+
+
+def _reindex() -> int:
+    settings = get_settings()
+    raw_dir = raw_directory(settings.data_dir)
+    try:
+        with _open_index(settings) as (store, vectors, model):
+            results = sync_index(raw_dir, store=store, vectors=vectors, embedding_model=model)
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except IngestionError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+
+    return _report_results({"target": str(raw_dir)}, results)
+
+
+def _delete_document(source: str) -> int:
+    settings = get_settings()
+    try:
+        with _open_index(settings) as (store, vectors, _model):
+            result = remove_document(source, store=store, vectors=vectors)
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except IngestionError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+
+    return _report_results({"target": source}, (result,))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -120,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "health":
         report = collect_health()
         print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
-        return 0 if report.status == "ok" else 1
+        return EXIT_OK if report.status == "ok" else EXIT_PARTIAL_FAILURE
 
     if args.command == "ask":
         question = (args.argument or "").strip()
@@ -133,6 +254,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not path:
             parser.error("chunk-report requires a file path")
         return _chunk_report(path, args.chunk_sizes, args.chunk_overlaps)
+
+    if args.command == "ingest":
+        path = (args.argument or "").strip()
+        if not path:
+            parser.error("ingest requires a file or directory path")
+        return _ingest(path, force=args.force)
+
+    if args.command == "reindex":
+        return _reindex()
+
+    if args.command == "delete-document":
+        source = (args.argument or "").strip()
+        if not source:
+            parser.error("delete-document requires the stored source label")
+        return _delete_document(source)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

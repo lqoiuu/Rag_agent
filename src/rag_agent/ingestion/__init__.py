@@ -1,4 +1,4 @@
-"""Document ingestion: decoding, normalization, loading and chunking."""
+"""Document ingestion: decoding, normalization, loading, chunking and indexing."""
 
 from rag_agent.ingestion.loaders import (
     LoadBatch,
@@ -9,6 +9,21 @@ from rag_agent.ingestion.loaders import (
     source_name,
 )
 from rag_agent.ingestion.normalize import decode_bytes, is_blank, normalize_text
+from rag_agent.ingestion.pipeline import (
+    EMBEDDING_BATCH_SIZE,
+    FAILED,
+    INDEXED,
+    REMOVED,
+    UNCHANGED,
+    IngestResult,
+    embed_chunks,
+    index_document,
+    ingest_directory,
+    ingest_path,
+    raw_directory,
+    remove_document,
+    sync_index,
+)
 from rag_agent.ingestion.splitters import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -24,21 +39,34 @@ from rag_agent.ingestion.stats import ChunkStats, summarize_chunks
 __all__ = [
     "DEFAULT_CHUNK_OVERLAP",
     "DEFAULT_CHUNK_SIZE",
+    "EMBEDDING_BATCH_SIZE",
+    "FAILED",
+    "INDEXED",
+    "REMOVED",
+    "UNCHANGED",
     "ChunkStats",
     "ChunkingConfig",
+    "IngestResult",
     "LoadBatch",
     "LoadFailure",
     "TextSection",
     "TextSplitter",
     "build_langchain_splitter",
     "decode_bytes",
+    "embed_chunks",
+    "index_document",
+    "ingest_directory",
+    "ingest_path",
     "is_blank",
     "iter_supported_files",
     "load_document",
     "load_documents",
     "normalize_text",
+    "raw_directory",
+    "remove_document",
     "source_name",
     "split_document",
     "split_into_sections",
     "summarize_chunks",
+    "sync_index",
 ]
