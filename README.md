@@ -10,7 +10,7 @@
 - uv 与 pyproject.toml 管理项目和依赖
 - LangChain、LangGraph、Chroma
 - 通义千问，通过 DashScope 的 OpenAI 兼容端点经 httpx 调用
-- pypdf 解析 PDF 文本
+- pypdf 解析 PDF 文本，fonttools 补齐 CFF 字体编码解析
 - langchain-text-splitters 负责递归字符切分
 - pydantic-settings
 - pytest、Ruff、mypy

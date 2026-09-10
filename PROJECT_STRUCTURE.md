@@ -255,7 +255,7 @@ rag-agent-assistant/
   3. 落库状态：`documents` 一行（`pages 32`、`chunks 37`、`version 4bef75f516aa`），`ingestion_jobs` 依次为 `succeeded`、`skipped`、`failed`、`failed`，向量总数 37。
   4. `rag-agent delete-document 20220726150404543.pdf`：`removed`、`vector_count` 37、`status` 为 `ok`，向量与元数据一并清除。
   5. `rag-agent reindex`：手册 A 重新 `indexed`（37 个分片），手册 B 仍失败，退出码 1。
-- 已知限制：pypdf 会为手册 A 的 CFF Type1 字体输出 `fontTools is required` 警告（每次加载 3 条），说明当前使用的是回退编码解析；文本能正确取出，但计划安装 `fonttools` 后重新加载并对比字符数与分片数，用数据确认提取是否更完整。
+- 字体解析对比实验：pypdf 原本为手册 A 的 CFF Type1 字体输出 3 条 `fontTools is required` 警告。加入 `fonttools` 4.64.0 后重新加载，**警告消失，提取结果完全不变**（13578 字符、32 页、37 个分片、分片长度最小 27、中位 240、最大 799），说明此前的回退编码解析已经准确，因此不需要重新入库。
 
 已知环境注意事项：
 
@@ -305,3 +305,4 @@ rag-agent-assistant/
 - 新增 `src/rag_agent/ingestion/pipeline.py`，串起加载、分片、Embedding 与两存储写入。
 - `src/rag_agent/__main__.py` 新增 `ingest`、`reindex`、`delete-document` 与 `--force`。
 - `tests/unit/` 新增四个测试文件；`ingestion_test_support.py` 增加隔离向量存储构造。
+- `pyproject.toml` 与 `uv.lock` 增加 fonttools 直接依赖，用于 pypdf 完整解析 CFF 字体编码。
