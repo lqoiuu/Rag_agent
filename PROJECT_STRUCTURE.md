@@ -179,7 +179,7 @@ rag-agent-assistant/
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 20 source files。
 - 真实模型验证：`rag-agent ask "扫地机器人充不进电时应该先检查什么。"` 返回 `status=ok`、`model=qwen-plus`、`latency_ms=1244.1`、`attempts=1`、`prompt_tokens=64`、`completion_tokens=33`。
 - `uv.lock` 已同步 pypdf 6.18.0。
-- 提交后追加了 `tests/unit/test_logging.py`（四个用例，沙箱内已通过），本机完整套件预期为 105 passed, 2 skipped。
+- 提交后追加了 `tests/unit/test_logging.py`（四个用例）；学习者在本地复核完整套件为 105 passed, 2 skipped in 1.18s。
 - 已知限制：编码检测是启发式的，`gb18030` 先于 `big5` 尝试，个别在两种编码下都合法的字节序列会被解成错字而不报错。
 
 已知环境注意事项：
