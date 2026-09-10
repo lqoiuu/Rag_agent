@@ -14,6 +14,27 @@
 
 精确依赖版本保存在 uv.lock。真实密钥只允许放入本地 .env，不能提交到 Git。
 
+## 环境重建
+
+- Python 版本：3.13.15，项目解释器位于 `.venv/`，该目录不提交到 Git。
+- `pyproject.toml` 要求 `>=3.13,<3.14`，依赖版本以 `uv.lock` 为准，安装时不会静默升级。
+- 在 `rag-agent-assistant/` 目录执行：
+
+```powershell
+uv sync
+.\.venv\Scripts\python.exe -m rag_agent health
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+```
+
+`uv sync` 会在 `.venv/` 缺失时创建它，并按照 `uv.lock` 安装运行依赖和 dev 依赖。
+
+`rag-agent health` 检查 Python 版本、虚拟环境、依赖版本和核心模块导入；输出 JSON 中 `status` 为 `ok` 时进程退出码为 0，否则为 1。
+
+真实密钥只写入本地 `.env`（从 `.env.example` 复制，已被 `.gitignore` 忽略）。
+
 ## 目录职责
 
 - src/rag_agent/：应用源码。
