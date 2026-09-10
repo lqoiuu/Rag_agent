@@ -2,13 +2,14 @@
 
 这是一个面向扫地机器人售后场景的学习与作品集项目。知识资料可以来自有权使用的说明书、维修手册和 FAQ；用户、设备、订单及工单接口均为本地模拟实现，不代表真实企业系统。
 
-当前状态：阶段 1 已完成，阶段 2 尚未开始。
+当前状态：阶段 2（模型适配层与最小问答），代码与离线测试已完成，真实模型联网验证待执行。
 
 ## 当前技术基线
 
 - Python 3.13
 - uv 与 pyproject.toml 管理项目和依赖
 - LangChain、LangGraph、Chroma
+- 通义千问，通过 DashScope 的 OpenAI 兼容端点经 httpx 调用
 - pydantic-settings
 - pytest、Ruff、mypy
 
@@ -49,12 +50,17 @@ uv sync
 - 类型化配置和绝对路径解析。
 - JSON 结构化日志。
 - Python、虚拟环境、依赖版本及核心模块导入健康检查。
+- 供应商无关的聊天与 Embedding Provider 协议，以及通义千问适配器。
+- 模型调用的超时、重试、错误分类、耗时和 token 用量记录。
+- 无网络、无密钥即可运行的 Fake Model 与 Fake Embedding。
+- 由配置组装的模型实例，以及最小 Prompt -> Model -> Parser 问答链路。
 
 ## 尚未实现
 
-- 通义千问模型适配。
 - 文档解析、分片、向量入库和检索。
 - LangGraph Agent 工作流。
 - Streamlit 页面。
+
+模型联网调用需要本地 `.env` 中的 `RAG_AGENT_QWEN_API_KEY`；相关集成测试默认跳过，只有设置 `RAG_AGENT_RUN_LIVE_TESTS=1` 时才访问网络。
 
 具体操作步骤由 Codex 在对话中逐步给出，不在 README 中维护阶段执行流程。
