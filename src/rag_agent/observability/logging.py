@@ -34,3 +34,7 @@ def configure_logging(level: str = "INFO") -> None:
 
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
+
+    # The provider layer already logs a compact summary per call, so the HTTP
+    # client's per-request INFO lines are noise on the command line.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
