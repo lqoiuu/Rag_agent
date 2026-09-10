@@ -29,6 +29,7 @@ from rag_agent.ingestion import (
 )
 from rag_agent.observability.logging import configure_logging
 from rag_agent.providers.base import EmbeddingModel, ModelError
+from rag_agent.retrieval import Retriever, RetrieverConfig
 from rag_agent.storage import MetadataStore
 from rag_agent.vectorstore import ChunkVectorStore
 
@@ -41,14 +42,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rag-agent")
     parser.add_argument(
         "command",
-        choices=("health", "ask", "chunk-report", "ingest", "reindex", "delete-document"),
+        choices=(
+            "health",
+            "ask",
+            "search",
+            "chunk-report",
+            "ingest",
+            "reindex",
+            "delete-document",
+        ),
         help="Command to execute.",
     )
     parser.add_argument(
         "argument",
         nargs="?",
-        help='Question text for "ask", a file path for "chunk-report", a path for '
-        '"ingest", or a stored source label for "delete-document".',
+        help='Question text for "ask" and "search", a file path for "chunk-report", '
+        'a path for "ingest", or a stored source label for "delete-document".',
     )
     parser.add_argument(
         "--chunk-sizes",
@@ -64,6 +73,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Re-index documents even when the stored version is unchanged.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Override the configured number of retrieval hits.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override the configured cosine similarity threshold.",
+    )
+    parser.add_argument(
+        "--source",
+        default="",
+        help="Restrict retrieval to one stored source label.",
     )
     return parser
 
@@ -143,6 +169,48 @@ def _open_index(
         vectors = ChunkVectorStore(settings.chroma_dir)
         with build_embedding_model(settings) as model:
             yield store, vectors, model
+
+
+@contextmanager
+def _open_retrieval(
+    settings: Settings,
+) -> Iterator[tuple[ChunkVectorStore, EmbeddingModel]]:
+    """Open only what retrieval needs: vectors plus an embedding model."""
+
+    vectors = ChunkVectorStore(settings.chroma_dir)
+    with build_embedding_model(settings) as model:
+        yield vectors, model
+
+
+def _search(query: str, *, top_k: int | None, threshold: float | None, source: str) -> int:
+    """Run one retrieval query and report why it hit or refused to trust it."""
+
+    settings = get_settings()
+    try:
+        with _open_retrieval(settings) as (vectors, model):
+            retriever = Retriever(
+                vectors=vectors,
+                embedding_model=model,
+                config=RetrieverConfig(
+                    top_k=settings.retrieval_top_k,
+                    threshold=settings.retrieval_threshold,
+                ),
+            )
+            result = retriever.search(
+                query,
+                top_k=top_k,
+                threshold=threshold,
+                source=source or None,
+            )
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    print(json.dumps({"status": "ok", **result.as_dict()}, ensure_ascii=False, indent=2))
+    return EXIT_OK if result.is_confident else EXIT_PARTIAL_FAILURE
 
 
 def _resolved_root(path: Path, settings: Settings) -> Path | None:
@@ -248,6 +316,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not question:
             parser.error('ask requires a question, for example: rag-agent ask "问题"')
         return _ask(question)
+
+    if args.command == "search":
+        query = (args.argument or "").strip()
+        if not query:
+            parser.error('search requires a query, for example: rag-agent search "主刷卡住"')
+        return _search(
+            query,
+            top_k=args.top_k,
+            threshold=args.threshold,
+            source=args.source,
+        )
 
     if args.command == "chunk-report":
         path = (args.argument or "").strip()

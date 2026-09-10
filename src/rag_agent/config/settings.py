@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rag_agent.domain.retrieval import DEFAULT_THRESHOLD, DEFAULT_TOP_K
 from rag_agent.providers.qwen import (
     DEFAULT_BASE_URL,
     DEFAULT_CHAT_MODEL,
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
     qwen_embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, min_length=1)
     model_timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, gt=0)
     model_max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0)
+    retrieval_top_k: int = Field(default=DEFAULT_TOP_K, ge=1)
+    retrieval_threshold: float = Field(default=DEFAULT_THRESHOLD, ge=-1.0, le=1.0)
 
     @field_validator("data_dir", "chroma_dir", "sqlite_path", mode="before")
     @classmethod

@@ -69,11 +69,21 @@ def test_query_returns_the_closest_chunk_first(vectors: ChunkVectorStore) -> Non
 
     hits = vectors.query([0.95, 0.05], top_k=2)
 
-    assert hits[0][0] == chunks[0].chunk_id
-    assert hits[0][2]["document_id"] == DOC_A
-    assert hits[0][2]["heading"] == ""
-    assert hits[0][2]["page"] == 0
-    assert hits[0][1] <= hits[1][1]
+    assert hits[0].chunk.chunk_id == chunks[0].chunk_id
+    assert hits[0].chunk.content == "甲的正文"
+    assert hits[0].chunk.document_id == DOC_A
+    assert hits[0].chunk.heading is None
+    assert hits[0].chunk.page is None
+    assert hits[0].distance <= hits[1].distance
+
+
+def test_query_can_filter_by_source(vectors: ChunkVectorStore) -> None:
+    vectors.upsert(make_document_chunks(DOC_A, "甲", source="a.md"), [[1.0, 0.0]])
+    vectors.upsert(make_document_chunks(DOC_B, "乙", source="b.md"), [[1.0, 0.0]])
+
+    hits = vectors.query([1.0, 0.0], top_k=5, source="b.md")
+
+    assert [hit.chunk.source for hit in hits] == ["b.md"]
 
 
 def test_mismatched_input_lengths_are_rejected(vectors: ChunkVectorStore) -> None:

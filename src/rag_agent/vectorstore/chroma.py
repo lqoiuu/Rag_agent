@@ -8,6 +8,7 @@ stays the single source of vectors.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,14 @@ import chromadb
 from rag_agent.domain.documents import DocumentChunk
 
 DEFAULT_COLLECTION = "rag_agent_chunks"
+
+
+@dataclass(frozen=True, slots=True)
+class VectorMatch:
+    """One query result: the reconstructed chunk plus its distance."""
+
+    chunk: DocumentChunk
+    distance: float
 
 
 class ChunkVectorStore:
@@ -90,21 +99,32 @@ class ChunkVectorStore:
         return int(self._collection.count())
 
     def query(
-        self, vector: Sequence[float], *, top_k: int = 5
-    ) -> tuple[tuple[str, float, dict[str, Any]], ...]:
-        """Return ``(chunk_id, distance, metadata)`` triples for a query vector."""
+        self,
+        vector: Sequence[float],
+        *,
+        top_k: int = 5,
+        source: str | None = None,
+    ) -> tuple[VectorMatch, ...]:
+        """Return matches ordered by distance, optionally filtered by source."""
 
         result = self._collection.query(
             query_embeddings=[list(vector)],
             n_results=top_k,
-            include=["distances", "metadatas"],
+            include=["distances", "metadatas", "documents"],
+            where={"source": source} if source is not None else None,
         )
         ids = result["ids"][0]
         distances = result["distances"][0]
         metadatas = result["metadatas"][0]
+        documents = result["documents"][0]
         return tuple(
-            (str(chunk_id), float(distance), dict(metadata))
-            for chunk_id, distance, metadata in zip(ids, distances, metadatas, strict=True)
+            VectorMatch(
+                chunk=_chunk_from_match(str(chunk_id), str(content), dict(metadata)),
+                distance=float(distance),
+            )
+            for chunk_id, distance, metadata, content in zip(
+                ids, distances, metadatas, documents, strict=True
+            )
         )
 
 
@@ -120,3 +140,20 @@ def _metadata(chunk: DocumentChunk) -> dict[str, Any]:
         "page": chunk.page if chunk.page is not None else 0,
         "heading": chunk.heading if chunk.heading is not None else "",
     }
+
+
+def _chunk_from_match(chunk_id: str, content: str, metadata: dict[str, Any]) -> DocumentChunk:
+    """Rebuild the domain chunk from stored metadata and content."""
+
+    page = int(metadata.get("page", 0) or 0)
+    heading = str(metadata.get("heading", "") or "")
+    return DocumentChunk(
+        chunk_id=chunk_id,
+        document_id=str(metadata.get("document_id", "")),
+        source=str(metadata.get("source", "")),
+        content=content,
+        index=int(metadata.get("chunk_index", 0) or 0),
+        char_range=(int(metadata.get("char_start", 0) or 0), int(metadata.get("char_end", 0) or 0)),
+        page=page or None,
+        heading=heading or None,
+    )

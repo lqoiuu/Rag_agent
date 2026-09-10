@@ -1,4 +1,4 @@
-"""Document domain models and ingestion errors."""
+"""Document and retrieval domain models plus ingestion errors."""
 
 from rag_agent.domain.documents import (
     SUFFIX_TO_FILE_TYPE,
@@ -24,8 +24,16 @@ from rag_agent.domain.errors import (
     MissingDependencyError,
     UnsupportedFileTypeError,
 )
+from rag_agent.domain.retrieval import (
+    DEFAULT_THRESHOLD,
+    DEFAULT_TOP_K,
+    RetrievalHit,
+    RetrievalResult,
+)
 
 __all__ = [
+    "DEFAULT_THRESHOLD",
+    "DEFAULT_TOP_K",
     "SUFFIX_TO_FILE_TYPE",
     "ChunkingError",
     "CorruptedDocumentError",
@@ -39,6 +47,8 @@ __all__ = [
     "FileType",
     "IngestionError",
     "MissingDependencyError",
+    "RetrievalHit",
+    "RetrievalResult",
     "SourceDocument",
     "UnsupportedFileTypeError",
     "build_chunk_id",
