@@ -58,6 +58,9 @@ rag-agent-assistant/
 │       │   ├── base.py
 │       │   ├── fake.py
 │       │   └── qwen.py
+│       ├── retrieval/
+│       │   ├── __init__.py
+│       │   └── retriever.py
 │       ├── storage/
 │       │   ├── __init__.py
 │       │   └── sqlite.py
@@ -76,6 +79,7 @@ rag-agent-assistant/
         ├── test_cli_ask.py
         ├── test_cli_chunk_report.py
         ├── test_cli_ingest.py
+        ├── test_cli_search.py
         ├── test_documents.py
         ├── test_fake_providers.py
         ├── test_health.py
@@ -99,7 +103,7 @@ rag-agent-assistant/
 
 | 文件 | 职责 | 当前作用 |
 |---|---|---|
-| .env.example | 声明允许使用的环境变量名称 | 提供配置模板，含路径、模型和重试参数，不包含真实密钥 |
+| .env.example | 声明允许使用的环境变量名称 | 提供配置模板，含路径、模型、重试与检索参数，不包含真实密钥 |
 | .gitignore | 定义 Git 排除规则 | 防止提交密钥、虚拟环境、缓存、日志和本地数据库 |
 | PROJECT_STRUCTURE.md | 保存真实项目结构和职责说明 | 用户要求同步结构时由 Codex 更新 |
 | README.md | 说明项目定位、可复现的环境重建步骤、当前能力和边界 | 不保存阶段操作流程 |
@@ -111,14 +115,15 @@ rag-agent-assistant/
 | 文件 | 职责 | 涉及知识 |
 |---|---|---|
 | src/rag_agent/__init__.py | 声明 rag_agent Python 包并提供版本号 | 包、模块、包元数据 |
-| src/rag_agent/__main__.py | 提供 `health`、`ask`、`chunk-report`、`ingest`、`reindex`、`delete-document` 六个命令，退出码 0 成功、1 部分失败、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
+| src/rag_agent/__main__.py | 提供 `health`、`ask`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document` 七个命令，退出码 0 成功、1 部分失败或低置信度、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
 | src/rag_agent/health.py | 集中检查 Python、虚拟环境、依赖和核心模块导入 | 运行环境、依赖元数据、模块导入 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
-| src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时和重试参数 | Pydantic、环境配置、路径稳定性 |
+| src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时、重试和检索参数 | Pydantic、环境配置、路径稳定性 |
 | src/rag_agent/config/providers.py | 依据 Settings 组装通义千问聊天与 Embedding 实例，缺密钥时在发请求前失败 | 依赖注入、组装与配置边界 |
 | src/rag_agent/domain/__init__.py | 对外暴露领域模型与摄取错误 | 包的公共 API |
 | src/rag_agent/domain/documents.py | 定义 FileType、DocumentStatus、DocumentPage、SourceDocument、DocumentChunk，以及稳定文档 ID、校验值和版本派生 | 领域模型、稳定标识、内容版本 |
 | src/rag_agent/domain/errors.py | 定义八类带稳定 code 的摄取错误，含分片错误 | 错误隔离、异常设计 |
+| src/rag_agent/domain/retrieval.py | 定义 RetrievalHit、RetrievalResult 与置信判定，reason 字段解释判定依据 | 领域模型、置信判定、可解释性 |
 | src/rag_agent/ingestion/__init__.py | 对外暴露加载、规范化、分片、统计与入库接口 | 模块边界 |
 | src/rag_agent/ingestion/normalize.py | 识别编码并规范化文本：BOM 嗅探、编码回退、换行与控制字符处理、空行折叠、幂等保证 | 字符编码、文本规范化、幂等性 |
 | src/rag_agent/ingestion/loaders.py | 把 TXT、Markdown 和 PDF 加载为 SourceDocument，批量失败隔离、重复内容标记与目录枚举 | Document Loader、错误隔离、批量一致性 |
@@ -135,8 +140,10 @@ rag-agent-assistant/
 | src/rag_agent/providers/fake.py | 提供脚本化 FakeChatModel 和确定性 FakeEmbeddingModel | 测试替身、确定性测试 |
 | src/rag_agent/storage/__init__.py | 对外暴露元数据仓储接口 | 模块边界 |
 | src/rag_agent/storage/sqlite.py | SQLite 元数据存储：documents、document_versions、ingestion_jobs 三张表，按来源 upsert、查询、删除并记录任务 | sqlite3、事务、唯一约束、版本历史 |
-| src/rag_agent/vectorstore/__init__.py | 对外暴露向量存储接口 | 模块边界 |
-| src/rag_agent/vectorstore/chroma.py | Chroma 封装：按稳定 chunk ID 幂等 upsert、按文档取 ID 与内容、删除、向量查询，Embedding 由项目 Provider 提供 | 向量维度、距离度量、幂等写入 |
+| src/rag_agent/vectorstore/__init__.py | 对外暴露向量存储与匹配结果接口 | 模块边界 |
+| src/rag_agent/vectorstore/chroma.py | Chroma 封装：按稳定 chunk ID 幂等 upsert、按文档取 ID 与内容、删除、向量查询并重建 DocumentChunk，支持按来源过滤 | 向量维度、距离度量、幂等写入、元数据回读 |
+| src/rag_agent/retrieval/__init__.py | 对外暴露检索器接口 | 模块边界 |
+| src/rag_agent/retrieval/retriever.py | 查询向量化、Top-K、来源过滤与阈值判定；单次调用可覆盖 top_k、threshold、source | 语义相似度、Top-K、阈值取舍 |
 
 ## 测试
 
@@ -165,6 +172,8 @@ rag-agent-assistant/
 | tests/unit/test_chroma_store.py | 向量幂等写入、同 ID 内容替换、按文档删除隔离、查询排序、输入长度校验 |
 | tests/unit/test_ingest_pipeline.py | 未变更短路不调用 Embedding、内容变更替换旧分片、失败保留旧版本并记录任务、删除清理两个存储、分批 Embedding |
 | tests/unit/test_cli_ingest.py | ingest、reindex、delete-document 的参数校验、退出码与成功、部分失败、缺密钥分支 |
+| tests/unit/test_retriever.py | 精确内容命中排第一、分数降序与排名、top-k 默认与覆盖、阈值高低分支、空索引、来源过滤、非法配置与调用参数 |
+| tests/unit/test_cli_search.py | search 的用法错误、命中输出、低置信度退出码 1、空索引与阈值越界 |
 | tests/integration/test_qwen_live.py | 真实模型联网调用与 Embedding 维度一致性，默认跳过 |
 
 ## 稳定设计文档
@@ -188,6 +197,8 @@ rag-agent-assistant/
 阶段 4（文本清洗、分片与参数实验）已完成并通过验收。
 
 阶段 5（向量化、持久化与增量索引）已完成并通过验收，含真实说明书入库验证。
+
+阶段 6（检索器 V1 与可解释结果）已完成并通过验收，含真实检索实测与一次重要的负面发现。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -257,6 +268,28 @@ rag-agent-assistant/
   5. `rag-agent reindex`：手册 A 重新 `indexed`（37 个分片），手册 B 仍失败，退出码 1。
 - 字体解析对比实验：pypdf 原本为手册 A 的 CFF Type1 字体输出 3 条 `fontTools is required` 警告。加入 `fonttools` 4.64.0 后重新加载，**警告消失，提取结果完全不变**（13578 字符、32 页、37 个分片、分片长度最小 27、中位 240、最大 799），说明此前的回退编码解析已经准确，因此不需要重新入库。
 
+阶段 6 证据（2026-09-10 实际执行）：
+
+- 代码提交：`5164c47`。
+- `ruff check`：All checks passed；`ruff format --check`：56 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 30 source files。
+- `pytest`：181 passed, 2 skipped（在 DSH 沙箱内执行）；另有 18 个使用 `tmp_path` 的用例受沙箱限制，由学习者在本地确认，两处合计 199 passed, 2 skipped。
+- 真实检索实测（37 个分片的真实索引，每次查询 1 次 Embedding 请求）：
+
+  | 查询 | best_score | rank 1 命中 | confident | 判定 |
+  |---|---|---|---|---|
+  | 制造商地址在哪里 | 0.5889 | `c0037` 第 32 页，制造商名称与地址 | true | 正确 |
+  | 使用产品前需要先做什么 | 0.6318 | `c0004` 第 3 页，**目录页** | true | 命中目录而非正文 |
+  | 这台扫地机器人明年会涨价吗 | 0.5897 | `c0030` 第 24 页，故障排查表 | true | 不应置信 |
+  | 同上，`--threshold 0.5` | 0.5897 | 同上 | true | 仍置信 |
+  | 执行标准，`--top-k 2 --source` | 0.5282 | `c0036` 第 28 页，执行标准 | true | 正确，来源过滤生效 |
+
+- **发现一：绝对余弦阈值不能区分「该答」与「不该答」。** 正确答案的 best_score 是 0.5889，知识库中完全不存在的问题（涨价预测）best_score 是 0.5897，两者几乎相同；把阈值提到 0.5 仍无法拒答，而继续提高到 0.6 会把正确答案一并拒掉。因此 `retrieval_threshold` 的默认 0.35 只是**松下界**，用于挡掉接近 0 的匹配，**不构成拒答机制**。这一结论直接决定阶段 7 必须依靠「只能依据 Context 回答」的提示词与引用校验，而不是分数阈值。
+- **发现二：目录页是检索噪声。** 第二个查询的 rank 1 是目录分片（0.6318），真正含答案的分片以 0.6307 排第二，仅差 0.0011。目录页与各类问题都有词汇重叠，是可复现的干扰源。
+- **发现三：top1 与 top2 的间隔同样不可分。** 相关查询的间隔为 0.0011，不相关查询的间隔为 0.0123，间隔反而更小，因此不能用它替代绝对阈值。这是先算数据再设计的一个反例，避免了凭感觉引入无效判据。
+- 五次运行的分数集中在 0.42 至 0.63 之间，说明 `text-embedding-v4` 的余弦相似度基线整体偏高，这解释了发现一。
+- 待阶段 8 用评测集回答的问题：是否需要重排、是否过滤或降权目录类分片、阈值取多少或改用相对判据。三条查询不是评测，只是第一个数据点，因此本阶段刻意未调整任何默认参数。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
@@ -287,22 +320,27 @@ rag-agent-assistant/
 - 未变更文档重新入库时短路，不重复调用 Embedding。
 - `rag-agent reindex` 重建全部索引并清除已删除文件的残留向量。
 - `rag-agent delete-document <来源>` 同时删除向量与元数据。
+- Top-K 语义检索，命中项带分片内容、来源、页码、标题、字符范围、相似度与排名。
+- 检索可按来源过滤，并支持在命令行覆盖 top_k、threshold 与 source。
+- 置信判定与判定依据说明（`confident` 与 `reason`），低置信度以退出码 1 表达而非崩溃。
+- `rag-agent search "问题"` 检索调试命令，输出可解释的命中列表。
 
 ## 尚未实现
 
-- 语义检索、低置信度拒答和来源引用（阶段 6 起）。
+- 依据检索结果生成带引用的答案，以及答案侧的拒答（阶段 7）。
 - 用户、设备、订单和工单工具。
 - LangGraph 路由、Checkpoint 和人工确认。
 - RAG 离线评测、Streamlit 界面、安全降级和 Docker 交付。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
+- 重排、目录类分片降权与阈值校准，需等阶段 8 的评测集给出依据。
 
 ## 最近结构变化
 
-本次同步（阶段 5）相对上一次的主要变化：
+本次同步（阶段 6）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/storage/`，承载 SQLite 元数据与任务记录。
-- 新增 `src/rag_agent/vectorstore/`，封装 Chroma 向量读写。
-- 新增 `src/rag_agent/ingestion/pipeline.py`，串起加载、分片、Embedding 与两存储写入。
-- `src/rag_agent/__main__.py` 新增 `ingest`、`reindex`、`delete-document` 与 `--force`。
-- `tests/unit/` 新增四个测试文件；`ingestion_test_support.py` 增加隔离向量存储构造。
-- `pyproject.toml` 与 `uv.lock` 增加 fonttools 直接依赖，用于 pypdf 完整解析 CFF 字体编码。
+- 新增 `src/rag_agent/domain/retrieval.py`，承载检索命中与置信判定模型。
+- 新增 `src/rag_agent/retrieval/`，承载检索引擎。
+- `src/rag_agent/vectorstore/chroma.py` 的 `query` 改为返回重构后的 `DocumentChunk`，并支持按来源过滤。
+- `src/rag_agent/__main__.py` 新增 `search` 命令与 `--top-k`、`--threshold`、`--source` 参数。
+- `src/rag_agent/config/settings.py` 与 `.env.example` 新增检索参数。
+- `tests/unit/` 新增两个测试文件。
