@@ -25,7 +25,8 @@ rag-agent-assistant/
 │   ├── architecture.md
 │   ├── glossary.md
 │   └── adr/
-│       └── 0001-technology-stack.md
+│       ├── 0001-technology-stack.md
+│       └── 0002-provider-layer.md
 ├── src/
 │   └── rag_agent/
 │       ├── __init__.py
@@ -114,12 +115,13 @@ rag-agent-assistant/
 | docs/architecture.md | 系统组件、数据流、存储边界和失败降级 |
 | docs/glossary.md | RAG、Embedding、Agent、Checkpoint 等术语 |
 | docs/adr/0001-technology-stack.md | 技术选型、备选方案和决策后果 |
+| docs/adr/0002-provider-layer.md | 模型接入方式、同步优先取舍和错误分类决策 |
 
 ## 当前阶段
 
 阶段 1（Python 3.13 工程骨架与环境）已完成并通过验收。
 
-阶段 2（模型适配层与最小问答）的代码、配置接线和离线测试已完成并提交；真实模型联网验证尚未执行。
+阶段 2（模型适配层与最小问答）已完成并通过验收，含真实模型联网验证。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -138,7 +140,8 @@ rag-agent-assistant/
 - `rag-agent health`：`status` 仍为 `ok`，新增导入链未破坏命令行入口。
 - `uv.lock` 已同步 httpx 直接依赖（`>=0.28,<1`）。
 - 锁定依赖版本：chromadb 1.5.9、langchain 1.4.0、langchain-chroma 1.1.0、langgraph 1.2.11、pydantic-settings 2.15.0。
-- 尚未执行：真实模型联网验证，需要本地 `.env` 中的 `RAG_AGENT_QWEN_API_KEY` 并设置 `RAG_AGENT_RUN_LIVE_TESTS=1`。
+- 真实模型联网验证（2026-09-10 实际执行）：`RAG_AGENT_RUN_LIVE_TESTS=1` 下 `pytest tests/integration` 为 2 passed in 3.90s；最小链路真实调用返回 `model=qwen-plus`、`latency_ms=1323`、`attempts=1`。
+- 验收对照：真实模型可以回答固定问题；无网络环境依靠 Fake Model 稳定运行全部核心测试（58 passed, 2 skipped）。
 
 已知环境注意事项：
 
@@ -178,3 +181,4 @@ rag-agent-assistant/
 - 新增 `tests/integration/`，用于默认跳过的真实联网验证。
 - `tests/unit/` 新增四个模型层测试文件和一个共享测试辅助模块。
 - `pyproject.toml` 增加 httpx 直接依赖和中文标点白名单。
+- 新增 `docs/adr/0002-provider-layer.md`，记录模型接入层的实现方式与取舍。
