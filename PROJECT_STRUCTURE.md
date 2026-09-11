@@ -259,7 +259,7 @@ rag-agent-assistant/
 | tests/unit/test_agent_graph.py | 四类意图各走对路径、澄清分支、权限失败、待确认不写库、暂停后确认只写一次、澄清上限、**结构上不存在收集直达创建的边** |
 | tests/unit/test_agent_memory.py | 第二轮读到第一轮消息、窗口裁剪而库中保留全量、线程之间不共享上下文、取消确认不写库、重复恢复不会二次写入、偏好进入 Prompt |
 | tests/unit/test_memory_checkpoints.py | 关闭后重新打开仍能读到会话、线程隔离、父链回溯与最新在前、按 checkpoint_id 精确取回、删除线程清理三张表、同一检查点重复写入幂等、limit 与 before 过滤 |
-| tests/unit/test_conversation_memory.py | 窗口保留最新消息且丢弃非法记录、空上下文渲染为空串、上下文字块标注为「不作为事实依据」、会话归属校验、未绑定会话可被认领一次、偏好按用户隔离且不随会话清除 |
+| tests/unit/test_conversation_memory.py | 窗口保留最新消息且丢弃非法记录、空上下文渲染为空串、上下文字块标注为「不作为事实依据」、会话归属校验、未绑定会话可被认领一次、偏好按用户隔离且不随会话清除、**登记表与检查点解析同一个数据库目标** |
 | tests/unit/test_cli_chat.py | chat 生成或复用 thread、两次独立调用共享同一会话、跨用户被拒、待确认不写库、--cancel 不写库、--confirm 建单、thread list/clear/preferences、参数互斥与缺密钥 |
 | tests/unit/test_cli_agent.py | agent 命令的轨迹输出、设备查询、待确认退出码 1、不再接受 `--confirm`、缺密钥 |
 | tests/unit/test_business_repository.py | 模拟数据幂等灌入、类型化查询、保修状态随参考日期变化、工单幂等键唯一约束、整数月加法边界 |
@@ -495,7 +495,7 @@ rag-agent-assistant/
 
 阶段 11 证据（2026-09-11 实际执行）：
 
-- 代码提交：`3f9fe05`（22 个文件，+2500 / −97；提交时受控文件 119 个）。
+- 代码提交：`3f9fe05`（22 个文件，+2500 / −97）、`f5238f3`（URI 目标解析修复）；提交时受控文件 120 个。
 - `ruff check`：All checks passed；`ruff format --check`：109 files already formatted。
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 52 source files。
 - `pytest`：**404 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
@@ -523,6 +523,7 @@ rag-agent-assistant/
 1. **LangGraph 在自有线程池里写检查点**：`graph.invoke` 会从多个线程并发调用 `put`/`put_writes`，`sqlite3` 默认的线程检查直接报错；仅加 `check_same_thread=False` 又会得到 `InterfaceError: bad parameter or other API misuse`。最终用可重入锁把事务串行化并显式管理提交。
 2. **隐式事务与 `BEGIN IMMEDIATE` 相遇**：Python 的 `sqlite3` 会在一条 `SELECT` 后打开隐式事务，导致「cannot start a transaction within a transaction」，因此写事务前先提交已打开的事务。
 3. **待确认节点后的条件边会把暂停点吃掉**：若在边上再判断一次 `confirmation`，未确认时会走 END，`ticket_create` 根本不被执行，`interrupt()` 也就永远不会触发。改为无条件边后，确认与否完全由节点内的暂停决定。
+4. **两个类对「数据库目标」的解析不一致**（提交 `f5238f3` 修复）：`SQLiteCheckpointer` 用 `uri=True` 连接，而 `ConversationStore` 没有，于是 `file:name?mode=memory&cache=shared` 这样的目标被后者当成磁盘上的字面文件名，两者静默使用了不同的数据库——不会报错，只是登记表看起来永远是空的。这是跑新测试时由项目根目录反复出现的空文件 `file` 暴露出来的，现已统一为 `uri=True`，并补了一条跨类回归测试。
 
 已知环境注意事项：
 
