@@ -48,9 +48,10 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-# Chinese full-width punctuation is intentional in prompts, log messages and
-# docstrings; RUF001 treats it as confusable with ASCII punctuation.
-allowed-confusables = ["，", "；", "？", "：", "（", "）"]
+# Chinese full-width punctuation is intentional in prompts, log messages, docstrings and in
+# the sentence-boundary classes of the injection patterns; RUF001 treats it as confusable
+# with ASCII punctuation.
+allowed-confusables = ["，", "；", "？", "：", "（", "）", "！", "。", "、", "“", "”", "·"]
 
 [tool.ruff.format]
 quote-style = "double"

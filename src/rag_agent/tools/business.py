@@ -30,6 +30,7 @@ from rag_agent.tools.models import (
     ToolResult,
     UserLookupArgs,
 )
+from rag_agent.tools.permissions import ToolPermissions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,13 +46,27 @@ def new_request_id() -> str:
     return f"req-{uuid.uuid4().hex[:12]}"
 
 
-def user_lookup(args: UserLookupArgs, *, repository: BusinessRepository) -> ToolResult:
+def user_lookup(
+    args: UserLookupArgs,
+    *,
+    repository: BusinessRepository,
+    permissions: ToolPermissions | None = None,
+) -> ToolResult:
     """Return one simulated user, or a classified failure."""
 
-    return _run(USER_LOOKUP, lambda: {"user": _require_user(repository, args.user_id).as_dict()})
+    return _run(
+        USER_LOOKUP,
+        permissions=permissions,
+        action=lambda: {"user": _require_user(repository, args.user_id).as_dict()},
+    )
 
 
-def device_lookup(args: DeviceLookupArgs, *, repository: BusinessRepository) -> ToolResult:
+def device_lookup(
+    args: DeviceLookupArgs,
+    *,
+    repository: BusinessRepository,
+    permissions: ToolPermissions | None = None,
+) -> ToolResult:
     """Return one device or all devices of a user, with warranty status."""
 
     def action() -> dict[str, object]:
@@ -59,7 +74,7 @@ def device_lookup(args: DeviceLookupArgs, *, repository: BusinessRepository) -> 
         if args.device_id is not None:
             device = _require_device(repository, args.device_id)
             if args.user_id is not None:
-                _require_owner(device, args.user_id)
+                _require_owner(device, args.user_id, permissions)
             return {"device": device.as_dict(as_of=as_of), "as_of": as_of.isoformat()}
 
         assert args.user_id is not None  # 由 DeviceLookupArgs 保证
@@ -72,10 +87,15 @@ def device_lookup(args: DeviceLookupArgs, *, repository: BusinessRepository) -> 
             "as_of": as_of.isoformat(),
         }
 
-    return _run(DEVICE_LOOKUP, action)
+    return _run(DEVICE_LOOKUP, action, permissions=permissions)
 
 
-def order_lookup(args: OrderLookupArgs, *, repository: BusinessRepository) -> ToolResult:
+def order_lookup(
+    args: OrderLookupArgs,
+    *,
+    repository: BusinessRepository,
+    permissions: ToolPermissions | None = None,
+) -> ToolResult:
     """Return one order or all orders of a user."""
 
     def action() -> dict[str, object]:
@@ -98,10 +118,15 @@ def order_lookup(args: OrderLookupArgs, *, repository: BusinessRepository) -> To
             "count": len(orders),
         }
 
-    return _run(ORDER_LOOKUP, action)
+    return _run(ORDER_LOOKUP, action, permissions=permissions)
 
 
-def create_ticket(args: CreateTicketArgs, *, repository: BusinessRepository) -> ToolResult:
+def create_ticket(
+    args: CreateTicketArgs,
+    *,
+    repository: BusinessRepository,
+    permissions: ToolPermissions | None = None,
+) -> ToolResult:
     """Create one simulated ticket, but only after explicit confirmation.
 
     Repeating the same request returns the existing ticket instead of creating a
@@ -116,7 +141,7 @@ def create_ticket(args: CreateTicketArgs, *, repository: BusinessRepository) -> 
             )
         _require_user(repository, draft.user_id)
         device = _require_device(repository, draft.device_id)
-        _require_owner(device, draft.user_id)
+        _require_owner(device, draft.user_id, permissions)
 
         key = args.idempotency_key or draft.idempotency_key()
         existing = repository.find_ticket_by_key(key)
@@ -137,22 +162,40 @@ def create_ticket(args: CreateTicketArgs, *, repository: BusinessRepository) -> 
         LOGGER.info("ticket created key=%s ticket=%s", key, record.ticket_id)
         return {"ticket": record.as_dict(), "created": True, "idempotency_key": key}
 
-    return _run(TICKET_CREATE, action)
+    return _run(TICKET_CREATE, action, permissions=permissions)
 
 
-def _run(tool: str, action: object) -> ToolResult:
-    """Execute one tool action and translate failures into a result."""
+def _run(
+    tool: str,
+    action: object,
+    *,
+    permissions: ToolPermissions | None = None,
+) -> ToolResult:
+    """Execute one tool action and translate failures into a result.
+
+    The permission check is the first thing that happens, before the action closure can
+    touch a repository: a denied call must not be able to cause a read or a write that a
+    later check would have to undo. It also runs through the same result path as every other
+    failure, so a denial is a classified outcome rather than an exception the caller has to
+    remember to catch.
+    """
 
     request_id = new_request_id()
+    role = str(permissions.role) if permissions is not None else "unspecified"
     try:
+        if permissions is not None:
+            permissions.require_tool(tool)
         data = action() if callable(action) else {}
     except ValidationError as exc:
         return _failure(tool, request_id, InvalidArgumentError(f"invalid arguments: {exc}"))
     except ToolError as exc:
+        if isinstance(exc, PermissionDeniedError):
+            LOGGER.warning("tool %s denied role=%s reason=%s", tool, role, exc.message)
         return _failure(tool, request_id, exc)
     except sqlite3.Error as exc:
         LOGGER.warning("tool %s store failure: %s", tool, exc)
         return _failure(tool, request_id, ToolUnavailableError(f"business store failed: {exc}"))
+    LOGGER.info("tool %s ok role=%s", tool, role)
     return ToolResult(tool=tool, status="ok", request_id=request_id, data=dict(data))
 
 
@@ -182,7 +225,24 @@ def _require_device(repository: BusinessRepository, device_id: str) -> DeviceRec
     return device
 
 
-def _require_owner(device: DeviceRecord, user_id: str) -> None:
+def _require_owner(
+    device: DeviceRecord,
+    user_id: str,
+    permissions: ToolPermissions | None = None,
+) -> None:
+    """Refuse access to somebody else's device unless the caller's role allows it.
+
+    The role check comes first and the owner check second, so the two failures stay
+    distinguishable: "this role may never read across users" is a different event from "this
+    argument claims a different owner". The default when no permissions are supplied is the
+    strict behaviour, so a caller that forgets to pass them does not accidentally gain the
+    cross-user read.
+    """
+
+    if permissions is not None:
+        permissions.require_own_record(owner_user_id=device.user_id, tool_name=DEVICE_LOOKUP)
+        if permissions.may_read_other_users:
+            return
     if device.user_id != user_id:
         raise PermissionDeniedError(
             f"device {device.device_id!r} does not belong to user {user_id!r}"
