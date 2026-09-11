@@ -1,6 +1,6 @@
 # 项目结构与文件职责
 
-最后同步：2026-09-10
+最后同步：2026-09-11
 
 ## 项目边界
 
@@ -75,6 +75,11 @@ rag-agent-assistant/
 │       │   ├── pipeline.py
 │       │   ├── splitters.py
 │       │   └── stats.py
+│       ├── memory/
+│       │   ├── __init__.py
+│       │   ├── checkpoints.py
+│       │   ├── conversation.py
+│       │   └── schema.py
 │       ├── observability/
 │       │   ├── __init__.py
 │       │   └── logging.py
@@ -99,26 +104,31 @@ rag-agent-assistant/
 │           ├── __init__.py
 │           └── chroma.py
 └── tests/
+    ├── conftest.py                 # 把每个用例的临时目录放在项目内的 .pytest_tmp/
     ├── integration/
     │   └── test_qwen_live.py
     └── unit/
         ├── agent_test_support.py
         ├── ingestion_test_support.py
+        ├── memory_test_support.py
         ├── model_test_support.py
         ├── pdf_fixtures.py
         ├── test_agent_graph.py
         ├── test_agent_intent.py
+        ├── test_agent_memory.py
         ├── test_business_repository.py
         ├── test_chroma_store.py
         ├── test_chunk_stats.py
         ├── test_cli_agent.py
         ├── test_cli_answer.py
         ├── test_cli_ask.py
+        ├── test_cli_chat.py
         ├── test_cli_chunk_report.py
         ├── test_cli_ingest.py
         ├── test_cli_search.py
         ├── test_cli_tool.py
         ├── test_cli_evaluate.py
+        ├── test_conversation_memory.py
         ├── test_documents.py
         ├── test_eval_dataset.py
         ├── test_eval_metrics.py
@@ -130,6 +140,7 @@ rag-agent-assistant/
         ├── test_loaders.py
         ├── test_loaders_pdf.py
         ├── test_logging.py
+        ├── test_memory_checkpoints.py
         ├── test_minimal_chain.py
         ├── test_normalize.py
         ├── test_provider_errors.py
@@ -160,13 +171,13 @@ rag-agent-assistant/
 | 文件 | 职责 | 涉及知识 |
 |---|---|---|
 | src/rag_agent/__init__.py | 声明 rag_agent Python 包并提供版本号 | 包、模块、包元数据 |
-| src/rag_agent/__main__.py | 提供 `health`、`ask`、`answer`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document`、`evaluate`、`tool`、`agent` 十一个命令，退出码 0 成功、1 部分失败或需用户动作、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
+| src/rag_agent/__main__.py | 提供 `health`、`ask`、`answer`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document`、`evaluate`、`tool`、`agent`、`chat`、`thread` 十三个命令，退出码 0 成功、1 部分失败或需用户动作、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
 | src/rag_agent/health.py | 集中检查 Python、虚拟环境、依赖和核心模块导入 | 运行环境、依赖元数据、模块导入 |
 | src/rag_agent/agent/__init__.py | 对外暴露状态、意图、节点、图与运行结果 | 模块边界 |
-| src/rag_agent/agent/state.py | AgentState：输入、意图、澄清轮次、知识与工具结果、工单流程、状态与节点轨迹，列表字段带 reducer | State 设计、Reducer、状态可观测性 |
-| src/rag_agent/agent/intent.py | 模型辅助的意图识别，解析失败或置信度过低一律回退 unknown | 结构化输出、确定性回退 |
-| src/rag_agent/agent/nodes.py | 八个节点：意图识别、知识问答、设备查询、工单信息收集、待确认、创建工单、澄清、失败 | Node 职责单一、写操作双重屏障 |
-| src/rag_agent/agent/graph.py | 条件边路由、澄清计数与 recursion_limit 守卫、AgentRun 结果视图 | Edge、条件边、循环限制 |
+| src/rag_agent/agent/state.py | AgentState：输入、多轮上下文字段、意图、澄清轮次、知识与工具结果、工单流程、状态与节点轨迹，列表字段带 reducer | State 设计、Reducer、状态可观测性 |
+| src/rag_agent/agent/intent.py | 模型辅助的意图识别，可接收最近对话作为上下文；解析失败或置信度过低一律回退 unknown | 结构化输出、确定性回退 |
+| src/rag_agent/agent/nodes.py | 八个节点：意图识别、知识问答、设备查询、工单信息收集、待确认、创建工单、澄清、失败；创建节点以 `interrupt()` 作为第一条语句，暂停早于任何工具调用 | Node 职责单一、写操作双重屏障 |
+| src/rag_agent/agent/graph.py | 条件边路由、澄清计数与 recursion_limit 守卫、Checkpointer 挂载、`Command(resume=...)` 恢复入口、AgentRun 与 ChatTurn 结果视图 | Edge、条件边、Interrupt、循环限制 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
 | src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时、重试和检索参数 | Pydantic、环境配置、路径稳定性 |
 | src/rag_agent/config/providers.py | 依据 Settings 组装通义千问聊天与 Embedding 实例，缺密钥时在发请求前失败 | 依赖注入、组装与配置边界 |
@@ -184,7 +195,11 @@ rag-agent-assistant/
 | src/rag_agent/ingestion/filters.py | 用点引导线比例识别目录或索引类分片，规则确定且可关闭，供阶段 8 做 A/B | 启发式规则、检索噪声、可实验性 |
 | src/rag_agent/generation/__init__.py | 对外暴露最小问答链路接口 | 模块边界 |
 | src/rag_agent/generation/minimal_qa.py | 用 LCEL 组装 Prompt -> Model -> Parser，并返回带模型证据的结构化答案 | LCEL、Runnable 协议、结构化输出 |
-| src/rag_agent/generation/rag_answer.py | 编号上下文、依据约束提示词、引用校验、六类拒答原因；拆出 prepare/finalize 供流式复用 | Grounding、结构化输出、引用校验、幻觉来源 |
+| src/rag_agent/generation/rag_answer.py | 编号上下文、依据约束提示词、引用校验、六类拒答原因；拆出 prepare/finalize 供流式复用；可把最近对话前置到用户消息 | Grounding、结构化输出、引用校验、幻觉来源 |
+| src/rag_agent/memory/__init__.py | 对外暴露 Checkpointer、会话登记表、窗口与偏好接口 | 模块边界 |
+| src/rag_agent/memory/schema.py | Checkpoint 三张表与 `_threads`、`user_preferences` 的建表语句，供检查点与对话登记共同使用 | SQLite 表设计、主键与索引 |
+| src/rag_agent/memory/checkpoints.py | 继承 BaseCheckpointSaver 的 SQLite 实现：按 channel 版本存 blob、写检查点与父指针、按任务写 writes、回溯父链、按线程删除；用可重入锁串行化事务 | Checkpoint 结构、序列化、线程安全、事务 |
+| src/rag_agent/memory/conversation.py | 会话归属校验、消息窗口裁剪与 Prompt 渲染、长期偏好读写 | 短期记忆与长期记忆的边界、上下文预算 |
 | src/rag_agent/observability/__init__.py | 对外暴露日志配置接口 | 模块边界 |
 | src/rag_agent/observability/logging.py | 输出 JSON 结构化日志，并把 httpx 的 INFO 日志降为 WARNING | Python logging、结构化数据、异常记录 |
 | src/rag_agent/providers/__init__.py | 对外暴露协议、错误类型、真实实现和 Fake 实现 | 模块边界、公共 API |
@@ -239,9 +254,14 @@ rag-agent-assistant/
 | tests/unit/test_retriever.py | 精确内容命中排第一、分数降序与排名、top-k 默认与覆盖、阈值高低分支、空索引、来源过滤、非法配置与调用参数 |
 | tests/unit/test_cli_search.py | search 的用法错误、命中输出、低置信度退出码 1、空索引与阈值越界 |
 | tests/unit/agent_test_support.py | Agent 测试辅助：脚本化意图/回答/字段提取回复，以及内存向量库与模拟业务仓储 |
+| tests/unit/memory_test_support.py | 会话记忆测试辅助：每次生成一个独立的共享缓存内存库名，使第二个连接仍能读到第一个连接写入的状态 |
 | tests/unit/test_agent_intent.py | 意图标签识别、非法 JSON、未知标签、低置信度降级、阈值可配、非数值置信度 |
-| tests/unit/test_agent_graph.py | 四类意图各走对路径、澄清分支、权限失败、待确认不写库、确认后写一次、澄清上限、**结构上不存在收集直达创建的边** |
-| tests/unit/test_cli_agent.py | agent 命令的轨迹输出、设备查询、待确认退出码 1、`--confirm` 创建、缺密钥 |
+| tests/unit/test_agent_graph.py | 四类意图各走对路径、澄清分支、权限失败、待确认不写库、暂停后确认只写一次、澄清上限、**结构上不存在收集直达创建的边** |
+| tests/unit/test_agent_memory.py | 第二轮读到第一轮消息、窗口裁剪而库中保留全量、线程之间不共享上下文、取消确认不写库、重复恢复不会二次写入、偏好进入 Prompt |
+| tests/unit/test_memory_checkpoints.py | 关闭后重新打开仍能读到会话、线程隔离、父链回溯与最新在前、按 checkpoint_id 精确取回、删除线程清理三张表、同一检查点重复写入幂等、limit 与 before 过滤 |
+| tests/unit/test_conversation_memory.py | 窗口保留最新消息且丢弃非法记录、空上下文渲染为空串、上下文字块标注为「不作为事实依据」、会话归属校验、未绑定会话可被认领一次、偏好按用户隔离且不随会话清除 |
+| tests/unit/test_cli_chat.py | chat 生成或复用 thread、两次独立调用共享同一会话、跨用户被拒、待确认不写库、--cancel 不写库、--confirm 建单、thread list/clear/preferences、参数互斥与缺密钥 |
+| tests/unit/test_cli_agent.py | agent 命令的轨迹输出、设备查询、待确认退出码 1、不再接受 `--confirm`、缺密钥 |
 | tests/unit/test_business_repository.py | 模拟数据幂等灌入、类型化查询、保修状态随参考日期变化、工单幂等键唯一约束、整数月加法边界 |
 | tests/unit/test_tools.py | 四个工具的契约、掩码字段、权限拒绝、确认要求、幂等重复调用、Schema 违规与存储故障可重试 |
 | tests/unit/test_cli_tool.py | tool list 契约输出、查询成功、权限失败退出码 1、未确认拒写、重复创建返回同一工单、参数错误退出码 2 |
@@ -264,6 +284,7 @@ rag-agent-assistant/
 | docs/glossary.md | RAG、Embedding、Agent、Checkpoint 等术语 |
 | docs/adr/0001-technology-stack.md | 技术选型、备选方案和决策后果 |
 | docs/adr/0002-provider-layer.md | 模型接入方式、同步优先取舍和错误分类决策 |
+| docs/adr/0003-conversation-memory.md | 会话持久化用自实现 SQLite Checkpointer、确认用节点内 Interrupt、窗口与长期偏好的边界 |
 
 ## 当前阶段
 
@@ -286,6 +307,8 @@ rag-agent-assistant/
 阶段 9（业务工具与工具契约）已完成并通过验收，含模拟业务数据、四个契约化工具与真实命令行验证。
 
 阶段 10（LangGraph 状态与确定性工作流）已完成并通过验收，含四类意图的真实路由验证与「模型无法跳过确认节点」的结构性证明。
+
+阶段 11（多轮记忆、Checkpoint 与人工确认）已完成并通过验收，含真实模型的跨进程续聊、跨用户隔离与取消不写库验证。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -470,9 +493,40 @@ rag-agent-assistant/
 - 确定性与模型边界：模型只做两件事——判断意图、从用户消息中读取字段；路由、业务顺序、澄清上限与写操作门禁全部由图和代码决定。意图输出非法或置信度低于 0.5 时一律降级为 `unknown` 并走澄清分支。
 - 循环限制：状态里带澄清轮次计数（默认 3 轮，超出返回 `clarification_limit` 并转人工），图调用同时设置 `recursion_limit=12`。**本阶段图中刻意没有环**：没有 Checkpointer 时单次运行收不到新的用户输入，因此澄清分支是「返回给调用方」而不是「原地重试」；阶段 11 会用 Interrupt 把它换成真正的暂停与恢复。
 
+阶段 11 证据（2026-09-11 实际执行）：
+
+- 代码提交：`3f9fe05`（22 个文件，+2500 / −97；提交时受控文件 119 个）。
+- `ruff check`：All checks passed；`ruff format --check`：109 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 52 source files。
+- `pytest`：**404 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- 真实模型端到端验收（离线脚本连续调用 CLI，真实 32 页说明书 34 个分片的索引）：
+
+  | 场景 | 退出码 | 关键结果 |
+  |---|---|---|
+  | 第 1 轮「制造商地址在哪里」 | 0 | `answered`，引用第 32 页，`checkpoints_before=0 → after=4` |
+  | **第 2 轮「那它的售后电话是多少」（独立进程）** | 0 | `answered`，售后电话 400-886-8888，引用第 27 页，**`checkpoints_before=5`**，说明第二个进程读到了第一个进程写入的检查点；`window_size=2` |
+  | 同一用户另一 thread | 0 | 正常回答，`window_size=0`，证明线程之间不共享上下文 |
+  | U1002 使用 U1001 的 thread | 2 | `thread_ownership_conflict`，未产生任何回答 |
+  | 工单请求（未确认） | 1 | `pending_confirmation`，`paused=true`，轨迹止于 `ticket_pending:awaiting_confirmation`；工单数 2 → 2 |
+  | 同线程 `--cancel` | 0 | `ticket_cancelled`，轨迹追加 `ticket_create:cancelled`；**工单数仍为 2** |
+  | 新线程 `--confirm` | 0 | `ticket_created`，工单号 `T11BEE6D1`；工单数 2 → 3 |
+  | `thread list --user-id U1001` | 0 | 列出 4 条会话，含消息数与检查点数 |
+  | `thread clear --thread-id T-acc-11-B` | 0 | `checkpoints_removed=5` |
+
+- **验收条件逐条对应**：「服务重启后可以继续指定会话」由第 2 行（另一个进程、`checkpoints_before=5`）证明；「不同用户不会共享上下文」由跨用户拒绝与同用户不同线程两行共同证明；「取消确认不会执行写操作」由「未确认」与「取消」两行中工单数保持 2 证明。
+- 确认顺序证据：轨迹中 `ticket_create` 只在恢复后才出现，且未确认时数据库中工单数不变——`interrupt()` 位于创建节点第一条语句，暂停早于任何工具调用。
+- 结构性证明仍然成立：`ticket_pending → ticket_create` 是唯一进入创建节点的边，阶段 10 的边集合断言原样通过。
+- 本次未新增运行时依赖：`langgraph 1.2.11` 与 `langgraph-checkpoint 4.2.0` 为既有依赖，Checkpointer 由本项目用标准库 `sqlite3` 实现。
+
+**实现中发现并已修复的三个真问题**（都来自实际运行，而不是代码审查）：
+
+1. **LangGraph 在自有线程池里写检查点**：`graph.invoke` 会从多个线程并发调用 `put`/`put_writes`，`sqlite3` 默认的线程检查直接报错；仅加 `check_same_thread=False` 又会得到 `InterfaceError: bad parameter or other API misuse`。最终用可重入锁把事务串行化并显式管理提交。
+2. **隐式事务与 `BEGIN IMMEDIATE` 相遇**：Python 的 `sqlite3` 会在一条 `SELECT` 后打开隐式事务，导致「cannot start a transaction within a transaction」，因此写事务前先提交已打开的事务。
+3. **待确认节点后的条件边会把暂停点吃掉**：若在边上再判断一次 `confirmation`，未确认时会走 END，`ticket_create` 根本不被执行，`interrupt()` 也就永远不会触发。改为无条件边后，确认与否完全由节点内的暂停决定。
+
 已知环境注意事项：
 
-- 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
+- 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`。**阶段 11 已用 `tests/conftest.py` 覆盖内置 `tmp_path`，把每个用例的临时目录放到项目内的 `.pytest_tmp/`（已被 .gitignore 忽略）**，因此沙箱内不再出现该错误；`.pytest_tmp/` 与 `pytest-cache-files-*` 仍属沙箱副作用，可安全删除。
 
 ## 当前已实现能力
 
@@ -523,21 +577,42 @@ rag-agent-assistant/
 - 模型边界清晰：模型只判断意图与读取字段，非法或低置信度输出一律降级为 `unknown` 并转澄清。
 - 写操作门禁：图上的边不允许从收集节点直达创建节点，工具层再次校验确认标记。
 - 澄清轮次上限与 `recursion_limit` 双守卫，超出即转人工而不是无限追问。
-- `rag-agent agent "问题" --user-id U1001` 单轮跑图，输出状态、意图、引用、工具结果、待确认动作与节点轨迹。
+- `rag-agent agent "问题" --user-id U1001` 单轮跑图，输出状态、意图、引用、工具结果、待确认动作与节点轨迹。该命令无状态，工单请求停在待确认状态且不写库。
+- 自实现 SQLite Checkpointer：继承 LangGraph 的 `BaseCheckpointSaver`，按通道版本保存状态，可跨进程恢复，且不引入额外运行时依赖。
+- `rag-agent chat "问题" --thread-id T1 --user-id U1001` 多轮会话：按 `thread_id` 隔离，最近 8 条消息进 Prompt 而完整历史留在 Checkpoint 中。
+- 服务重启后继续同一会话：两个独立进程读写同一个检查点库，第二个进程能读到第一个进程写入的状态。
+- 人工确认为图上真实暂停：`ticket_create` 节点第一条语句是 `interrupt()`，暂停早于任何工具调用；`--confirm` 从断点恢复并写库，`--cancel` 恢复后不产生任何写入。
+- 会话归属校验：跨用户使用同一 `thread_id` 返回 `thread_ownership_conflict` 且退出码 2。
+- 短期记忆与长期记忆分离：消息窗口只影响 Prompt，长期偏好按 `user_id` 存在 `user_preferences` 表，清除会话不会删除偏好。
+- `rag-agent thread list|clear|preferences`：列出会话（含消息数与检查点数）、清除指定会话并返回删除数量、查看或写入长期偏好。
+- 会话消息在每轮结束后通过 `update_state` 追加，使下一轮能读取上一轮的用户消息与助手回复。
 
 ## 尚未实现
 
-- 多轮会话、Checkpoint 与真正的人工确认暂停恢复（阶段 11；工具层与工具链的确认契约已就位）。
-- Streamlit 界面、安全降级和 Docker 交付。
+- Streamlit 界面、安全与可观测性降级、Docker 交付（阶段 12、13、14）。
+- 由用户文本「确认/取消」触发恢复：当前必须用 `--confirm` / `--cancel` 显式表达，以避免让模型决定是否写库。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
 - 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
 - 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
 - 表格序号与上下文编号混淆导致的引用越界（6 条），需要更强的格式约束或校验提示。
-- 角色与权限表：当前只有“属主”一条规则，模拟定位下够用但不足以表达更细的授权。
+- 角色与权限表：当前只有「属主」一条规则，模拟定位下够用但不足以表达更细的授权。
 
 ## 最近结构变化
 
-本次同步（阶段 10）相对上一次的主要变化：
+本次同步（阶段 11）相对上一次的主要变化：
+
+- 新增 `src/rag_agent/memory/`：`schema.py` 保存建表语句，`checkpoints.py` 是自实现的 SQLite Checkpointer，`conversation.py` 负责会话归属、消息窗口与长期偏好。
+- `src/rag_agent/agent/nodes.py`：创建工单节点以 `interrupt()` 作为第一条语句，暂停早于任何工具调用；字段抽取改读整个 state 以使用最近对话。
+- `src/rag_agent/agent/graph.py`：可挂载 Checkpointer，新增 `ChatTurn` 与 `chat_turn()` 支持按线程运行与 `Command(resume=...)` 恢复；**待确认节点之后由条件边改为无条件边**，确认与否交给节点内的暂停决定。
+- `src/rag_agent/agent/intent.py`：`classify_intent` 接受最近对话作为 Prompt 上下文（路由仍只看返回标签与置信度）。
+- `src/rag_agent/generation/rag_answer.py`：用户消息可前置「最近对话 + 长期偏好」区块，并明确标注该区块不作为事实依据。
+- `src/rag_agent/config/settings.py`：新增 `conversation_window_size` 与 `checkpoint_path`。
+- `src/rag_agent/__main__.py`：新增 `chat` 与 `thread` 命令及 `--thread-id`、`--cancel`、`--preference`、`--window`；`agent` 命令移除 `--confirm`（恢复暂停属于 `chat`）。
+- `tests/conftest.py`：覆盖内置 `tmp_path`，把临时目录放到项目内 `.pytest_tmp/`，使沙箱内也能正常跑完全部用例。
+- `tests/unit/` 新增四个测试文件与一个测试辅助模块（`memory_test_support.py`）。
+- `docs/adr/0003-conversation-memory.md`：记录 Checkpointer 实现方式、Interrupt 位置与记忆边界的决策。
+
+上一次同步（阶段 10）的主要变化：
 
 - 新增 `src/rag_agent/agent/`，承载状态、意图识别、节点与图。
 - `src/rag_agent/generation/rag_answer.py` 抽出公共的 `extract_json_object`，供意图识别复用。

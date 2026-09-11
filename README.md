@@ -2,7 +2,7 @@
 
 这是一个面向扫地机器人售后场景的学习与作品集项目。知识资料可以来自有权使用的说明书、维修手册和 FAQ；用户、设备、订单及工单接口均为本地模拟实现，不代表真实企业系统。
 
-当前状态：阶段 10（LangGraph 状态与确定性工作流）已完成并通过验收。
+当前状态：阶段 11（多轮记忆、Checkpoint 与人工确认）已完成并通过验收。
 
 ## 当前技术基线
 
@@ -13,6 +13,7 @@
 - pypdf 解析 PDF 文本，fonttools 补齐 CFF 字体编码解析
 - langchain-text-splitters 负责递归字符切分
 - pydantic-settings
+- 会话持久化使用 langgraph-checkpoint 的 `BaseCheckpointSaver` 与标准库 `sqlite3` 自实现，不额外引入 checkpoint 后端依赖
 - pytest、Ruff、mypy
 
 精确依赖版本保存在 uv.lock。真实密钥只允许放入本地 .env，不能提交到 Git。
@@ -78,8 +79,12 @@ uv sync
 - 模拟业务数据与四个契约化工具：用户查询、设备查询（含保修状态）、订单查询与工单创建。
 - 工具失败返回稳定错误码与可重试标记，不把错误伪装成正常结果；写工具在未确认时拒绝写入，重复请求返回同一张工单。
 - `rag-agent tool list` 与 `rag-agent tool <名称> --args '{...}'`，可脱离 Agent 单独调用任意工具。
-- `rag-agent agent "问题"` LangGraph 工作流：意图路由到知识问答、设备查询或工单流程，输出状态、引用、工具结果与节点轨迹。
-- 工单流程在提交前停在待确认状态，**图上的边不允许从信息收集直达创建节点**，工具层再校验一次确认标记。
+- `rag-agent agent "问题"` LangGraph 工作流：意图路由到知识问答、设备查询或工单流程，输出状态、引用、工具结果与节点轨迹。该命令**无状态**，工单请求停在待确认状态且不写库。
+- `rag-agent chat "问题" --thread-id T1 --user-id U1001` 多轮会话：按 `thread_id` 隔离，会话状态由 SQLite Checkpointer 持久化，**进程重启后可以继续同一个会话**；最近 8 条消息进 Prompt，完整历史留在 Checkpoint 中。
+- 工单确认是图上的真实暂停：`ticket_create` 节点第一件事就是 `interrupt()`，暂停发生在任何工具调用之前。`rag-agent chat --thread-id T1 --user-id U1001 --confirm` 从断点恢复并创建工单；`--cancel` 恢复后不执行任何写入，两者互斥。
+- `rag-agent thread list|clear|preferences --user-id U1001`：查看会话、清除某个会话（返回删除的 Checkpoint 数量）、查看或写入长期偏好。
+- 长期偏好按 `user_id` 保存，清除会话不会删除偏好；跨用户使用他人的 `thread_id` 会被拒绝（`thread_ownership_conflict`，退出码 2）。
+- 写操作有两道独立屏障：**图上的边不允许从信息收集直达创建节点**，且 `ticket_create` 节点先暂停等人确认；工具层再校验一次确认标记，任一道都能单独挡住未确认写入。
 
 ## 模拟数据边界
 
@@ -100,9 +105,9 @@ uv sync
 
 ## 尚未实现
 
-- 多轮会话、Checkpoint 与人工确认的暂停恢复。
-- Streamlit 页面。
+- Streamlit 页面、安全与可观测性降级、Docker 交付。
 - 矢量轮廓（文字转曲线）PDF 的文本提取，需要 OCR，当前明确不支持。
+- 表的角色与权限：目前只有「调用方必须是设备属主」一条规则。
 
 **已知检索限制**：49 条实测数据显示，可回答与不可回答问题的最高相似度区间重叠 0.1082，前两名分差同样重叠，因此 `RAG_AGENT_RETRIEVAL_THRESHOLD` **不存在能把两组分开的阈值**，它只用于避免无意义的模型调用；拒答由「只能依据资料回答」的约束与引用校验承担。目录类分片已用确定性规则在入库时过滤（前两名分差由 0.0011 提升到 0.0375）。另有两条安全类问题因第 2 页分片过长、主题被稀释而漏检，属已知待改进项。
 

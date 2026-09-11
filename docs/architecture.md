@@ -205,9 +205,20 @@ flowchart TD
 - Chroma：仅保存文本分片的向量、检索所需内容及元数据。
 - SQLite 文档域：保存原文档、版本、校验值、导入任务和错误状态。
 - SQLite 业务域：保存可预测的模拟用户、设备、订单和工单数据。
-- Checkpoint：保存按 `thread_id` 隔离的 Agent 执行状态。
+- Checkpoint：保存按 `thread_id` 隔离的 Agent 执行状态，包括完整消息历史与暂停位置；默认与元数据、业务数据共用 `data/rag_agent.sqlite3`，但使用独立的表和独立连接。
+- 会话归属：`_threads` 表记录 `thread_id → user_id`。LangGraph 视 `thread_id` 为不透明字符串，因此「这条会话属于谁」属于本系统的应用状态，由代码而非 Checkpoint 判定。
+- 长期偏好：`user_preferences` 表按 `user_id` 保存，与消息历史分离，清除会话不影响偏好。
 - Streamlit session state：只保存界面临时状态，不能作为唯一业务状态或确认依据。
 - 文件系统：保存原始文档、可选清洗结果、评测集和本地持久化数据。
+
+记忆分层：
+
+```text
+本轮输入 ──┐
+           ├─> Prompt 窗口（最近 8 条，可配） ──> 模型
+长期偏好 ──┘
+           └─ 完整消息历史 ──> Checkpoint（不随窗口裁剪）
+```
 
 ## 8. 信任边界与安全控制
 
