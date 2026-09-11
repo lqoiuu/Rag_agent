@@ -1,5 +1,6 @@
 """Document ingestion: decoding, normalization, loading, chunking and indexing."""
 
+from rag_agent.ingestion.filters import DEFAULT_LEADER_RATIO, is_index_like
 from rag_agent.ingestion.loaders import (
     LoadBatch,
     LoadFailure,
@@ -39,6 +40,7 @@ from rag_agent.ingestion.stats import ChunkStats, summarize_chunks
 __all__ = [
     "DEFAULT_CHUNK_OVERLAP",
     "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_LEADER_RATIO",
     "EMBEDDING_BATCH_SIZE",
     "FAILED",
     "INDEXED",
@@ -58,6 +60,7 @@ __all__ = [
     "ingest_directory",
     "ingest_path",
     "is_blank",
+    "is_index_like",
     "iter_supported_files",
     "load_document",
     "load_documents",

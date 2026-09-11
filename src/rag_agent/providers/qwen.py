@@ -7,10 +7,11 @@ editing business code.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -112,6 +113,34 @@ def _response_detail(response: httpx.Response) -> str:
     """Return a short, single-line excerpt of an error body."""
 
     return response.text.strip().replace("\n", " ")[:_ERROR_DETAIL_LIMIT]
+
+
+def _parse_stream_line(line: str) -> str | None:
+    """Extract one text delta from a server-sent-event line."""
+
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return None
+    data = stripped[len("data:") :].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        payload = json.loads(data)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return None
+    content = delta.get("content")
+    return content if isinstance(content, str) and content else None
 
 
 def _require_api_key(api_key: str | None) -> str:
@@ -247,6 +276,57 @@ class _QwenTransport:
             raise ModelConnectionError("model request was never attempted", model=self._model_name)
         raise last_error
 
+    def stream_json(self, path: str, payload: dict[str, Any]) -> Iterator[str]:
+        """Stream a server-sent-event reply, yielding text deltas.
+
+        Retries only happen before the first delta; once output has been handed
+        to the caller, a retry would duplicate text.
+        """
+
+        client = self._http_client()
+        attempts = 0
+        while True:
+            attempts += 1
+            yielded = False
+            try:
+                try:
+                    with client.stream(
+                        "POST",
+                        f"{self._base_url}{path}",
+                        json=payload,
+                        headers=self._headers(),
+                    ) as response:
+                        if response.status_code != httpx.codes.OK:
+                            response.read()
+                            raise self._error_for_status(response)
+                        for line in response.iter_lines():
+                            delta = _parse_stream_line(line)
+                            if delta is None:
+                                continue
+                            yielded = True
+                            yield delta
+                except httpx.TimeoutException as exc:
+                    raise ModelTimeoutError(
+                        f"model stream stalled: {exc}", model=self._model_name
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    raise ModelConnectionError(
+                        f"model stream could not be completed: {exc}", model=self._model_name
+                    ) from exc
+                return
+            except ModelError as exc:
+                if yielded or not exc.retryable or attempts > self._retry_policy.max_retries:
+                    raise
+                delay = self._retry_policy.delay_seconds(attempts - 1, self._random)
+                LOGGER.warning(
+                    "qwen stream failed code=%s attempt=%d/%d retry_in_ms=%.1f",
+                    exc.code,
+                    attempts,
+                    self._retry_policy.max_retries,
+                    delay * 1000.0,
+                )
+                self._sleep(delay)
+
 
 class QwenChatModel:
     """Chat completion adapter for the DashScope compatible endpoint."""
@@ -336,6 +416,22 @@ class QwenChatModel:
             attempts=result.attempts,
             usage=usage,
         )
+
+    def stream_chat(
+        self, messages: Sequence[ChatMessage], *, temperature: float = 0.0
+    ) -> Iterator[str]:
+        """Yield the reply as the provider sends it, delta by delta."""
+
+        if not messages:
+            raise ModelRequestError("chat requires at least one message", model=self._model_name)
+
+        payload: dict[str, Any] = {
+            "model": self._model_name,
+            "messages": [message.as_payload() for message in messages],
+            "temperature": temperature,
+            "stream": True,
+        }
+        yield from self._transport.stream_json("/chat/completions", payload)
 
 
 class QwenEmbeddingModel:

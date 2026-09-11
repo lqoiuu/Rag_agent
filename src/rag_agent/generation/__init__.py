@@ -1,4 +1,4 @@
-"""Answer generation built on top of the provider protocols."""
+"""Answer generation: the minimal chain and the grounded RAG answer."""
 
 from rag_agent.generation.minimal_qa import (
     SYSTEM_PROMPT,
@@ -8,12 +8,44 @@ from rag_agent.generation.minimal_qa import (
     build_minimal_qa_chain,
     to_chat_messages,
 )
+from rag_agent.generation.rag_answer import (
+    DEFAULT_MAX_CONTEXT_CHARS,
+    RAG_SYSTEM_PROMPT,
+    AnswerStatus,
+    PreparedAnswer,
+    RagAnswer,
+    RefusalCause,
+    answer_with_context,
+    build_context,
+    build_messages,
+    build_user_prompt,
+    finalize_answer,
+    format_location,
+    parse_model_payload,
+    prepare_answer,
+    stream_raw_answer,
+)
 
 __all__ = [
+    "DEFAULT_MAX_CONTEXT_CHARS",
+    "RAG_SYSTEM_PROMPT",
     "SYSTEM_PROMPT",
     "USER_TEMPLATE",
+    "AnswerStatus",
     "MinimalAnswer",
+    "PreparedAnswer",
+    "RagAnswer",
+    "RefusalCause",
     "answer_question",
+    "answer_with_context",
+    "build_context",
+    "build_messages",
     "build_minimal_qa_chain",
+    "build_user_prompt",
+    "finalize_answer",
+    "format_location",
+    "parse_model_payload",
+    "prepare_answer",
+    "stream_raw_answer",
     "to_chat_messages",
 ]

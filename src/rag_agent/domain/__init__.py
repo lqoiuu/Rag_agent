@@ -1,5 +1,6 @@
-"""Document and retrieval domain models plus ingestion errors."""
+"""Document, retrieval and citation domain models plus ingestion errors."""
 
+from rag_agent.domain.citation import Citation, build_excerpt
 from rag_agent.domain.documents import (
     SUFFIX_TO_FILE_TYPE,
     DocumentChunk,
@@ -36,6 +37,7 @@ __all__ = [
     "DEFAULT_TOP_K",
     "SUFFIX_TO_FILE_TYPE",
     "ChunkingError",
+    "Citation",
     "CorruptedDocumentError",
     "DocumentChunk",
     "DocumentNotFoundError",
@@ -53,6 +55,7 @@ __all__ = [
     "UnsupportedFileTypeError",
     "build_chunk_id",
     "build_document_id",
+    "build_excerpt",
     "checksum_of",
     "file_type_for_suffix",
     "version_of",

@@ -52,8 +52,26 @@ class RetrievalResult:
         return self.hits[0].score if self.hits else None
 
     @property
+    def margin(self) -> float | None:
+        """Gap between the best and second best score, or None when unavailable.
+
+        Recorded so stage 8 can test whether a relative signal separates
+        answerable questions better than the absolute threshold, which stage 6
+        measured to be unreliable.
+        """
+
+        if len(self.hits) < 2:
+            return None
+        return round(self.hits[0].score - self.hits[1].score, 6)
+
+    @property
     def is_confident(self) -> bool:
-        """True only when a hit exists and its score reaches the threshold."""
+        """True only when a hit exists and its score reaches the threshold.
+
+        This is a coarse floor used to avoid pointless model calls. Stage 6
+        measured that it cannot separate answerable from unanswerable questions,
+        so it is deliberately *not* the refusal mechanism.
+        """
 
         best = self.best_score
         return best is not None and best >= self.threshold
@@ -82,6 +100,7 @@ class RetrievalResult:
             "top_k": self.top_k,
             "confident": self.is_confident,
             "best_score": None if self.best_score is None else round(self.best_score, 4),
+            "margin": self.margin,
             "reason": self.reason,
             "hits": [hit.as_dict() for hit in self.hits],
         }

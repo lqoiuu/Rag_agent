@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,7 +12,14 @@ from pathlib import Path
 from rag_agent.config import build_chat_model, build_embedding_model, get_settings
 from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
-from rag_agent.generation import answer_question
+from rag_agent.generation import (
+    RagAnswer,
+    answer_question,
+    answer_with_context,
+    finalize_answer,
+    prepare_answer,
+    stream_raw_answer,
+)
 from rag_agent.health import collect_health
 from rag_agent.ingestion import (
     DEFAULT_CHUNK_OVERLAP,
@@ -28,7 +36,7 @@ from rag_agent.ingestion import (
     sync_index,
 )
 from rag_agent.observability.logging import configure_logging
-from rag_agent.providers.base import EmbeddingModel, ModelError
+from rag_agent.providers.base import ChatModel, EmbeddingModel, ModelError
 from rag_agent.retrieval import Retriever, RetrieverConfig
 from rag_agent.storage import MetadataStore
 from rag_agent.vectorstore import ChunkVectorStore
@@ -45,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "health",
             "ask",
+            "answer",
             "search",
             "chunk-report",
             "ingest",
@@ -56,8 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "argument",
         nargs="?",
-        help='Question text for "ask" and "search", a file path for "chunk-report", '
-        'a path for "ingest", or a stored source label for "delete-document".',
+        help='Question text for "ask", "answer" and "search", a file path for '
+        '"chunk-report", a path for "ingest", or a stored source label for '
+        '"delete-document".',
     )
     parser.add_argument(
         "--chunk-sizes",
@@ -90,6 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--source",
         default="",
         help="Restrict retrieval to one stored source label.",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream the raw model output for the answer command before the JSON result.",
+    )
+    parser.add_argument(
+        "--keep-index-chunks",
+        action="store_true",
+        help="Keep table-of-contents style chunks when indexing instead of dropping them.",
     )
     return parser
 
@@ -182,6 +202,122 @@ def _open_retrieval(
         yield vectors, model
 
 
+@contextmanager
+def _open_answering(
+    settings: Settings,
+) -> Iterator[tuple[ChunkVectorStore, EmbeddingModel, ChatModel]]:
+    """Open retrieval plus the chat model used to write the grounded answer."""
+
+    vectors = ChunkVectorStore(settings.chroma_dir)
+    with (
+        build_embedding_model(settings) as embedding_model,
+        build_chat_model(settings) as chat_model,
+    ):
+        yield vectors, embedding_model, chat_model
+
+
+def _answer(
+    question: str,
+    *,
+    top_k: int | None,
+    threshold: float | None,
+    source: str,
+    stream: bool = False,
+) -> int:
+    """Answer a question strictly from retrieved evidence, with citations."""
+
+    settings = get_settings()
+    try:
+        with _open_answering(settings) as (vectors, embedding_model, chat_model):
+            retriever = Retriever(
+                vectors=vectors,
+                embedding_model=embedding_model,
+                config=RetrieverConfig(
+                    top_k=settings.retrieval_top_k,
+                    threshold=settings.retrieval_threshold,
+                ),
+            )
+            if stream:
+                answer = _stream_grounded_answer(
+                    question,
+                    retriever=retriever,
+                    chat_model=chat_model,
+                    top_k=top_k,
+                    threshold=threshold,
+                    source=source or None,
+                )
+            else:
+                answer = answer_with_context(
+                    question,
+                    retriever=retriever,
+                    chat_model=chat_model,
+                    top_k=top_k,
+                    threshold=threshold,
+                    source=source or None,
+                )
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    payload = answer.as_dict()
+    status = "ok" if answer.answered else "refused"
+    print(
+        json.dumps(
+            {
+                "status": status,
+                **{key: value for key, value in payload.items() if key != "answer_status"},
+                "answer_status": str(answer.status),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return EXIT_OK if answer.answered else EXIT_PARTIAL_FAILURE
+
+
+def _stream_grounded_answer(
+    question: str,
+    *,
+    retriever: Retriever,
+    chat_model: ChatModel,
+    top_k: int | None,
+    threshold: float | None,
+    source: str | None,
+) -> RagAnswer:
+    """Print the raw model stream, then return the validated answer.
+
+    Deltas are printed as they arrive so the output is genuinely incremental;
+    the structured result is printed by the caller once validation has run.
+    """
+
+    prepared = prepare_answer(
+        question,
+        retriever=retriever,
+        top_k=top_k,
+        threshold=threshold,
+        source=source,
+    )
+    if prepared.refusal is not None:
+        return prepared.refusal
+
+    started = time.perf_counter()
+    deltas: list[str] = []
+    for delta in stream_raw_answer(prepared, chat_model):
+        deltas.append(delta)
+        print(delta, end="", flush=True)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    print()
+    return finalize_answer(
+        prepared,
+        "".join(deltas),
+        model=chat_model.model_name,
+        latency_ms=elapsed_ms,
+    )
+
+
 def _search(query: str, *, top_k: int | None, threshold: float | None, source: str) -> int:
     """Run one retrieval query and report why it hit or refused to trust it."""
 
@@ -240,14 +376,19 @@ def _report_results(payload: dict[str, object], results: Sequence[IngestResult])
     return EXIT_OK if not failures else EXIT_PARTIAL_FAILURE
 
 
-def _ingest(path: str, *, force: bool) -> int:
+def _ingest(path: str, *, force: bool, keep_index_chunks: bool = False) -> int:
     target = Path(path)
     settings = get_settings()
     try:
         with _open_index(settings) as (store, vectors, model):
             if target.is_dir():
                 results = ingest_directory(
-                    target, store=store, vectors=vectors, embedding_model=model, force=force
+                    target,
+                    store=store,
+                    vectors=vectors,
+                    embedding_model=model,
+                    force=force,
+                    drop_index_like_chunks=not keep_index_chunks,
                 )
             else:
                 results = (
@@ -258,6 +399,7 @@ def _ingest(path: str, *, force: bool) -> int:
                         embedding_model=model,
                         root=_resolved_root(target, settings),
                         force=force,
+                        drop_index_like_chunks=not keep_index_chunks,
                     ),
                 )
     except ModelError as exc:
@@ -270,12 +412,18 @@ def _ingest(path: str, *, force: bool) -> int:
     return _report_results({"target": str(target)}, results)
 
 
-def _reindex() -> int:
+def _reindex(*, keep_index_chunks: bool = False) -> int:
     settings = get_settings()
     raw_dir = raw_directory(settings.data_dir)
     try:
         with _open_index(settings) as (store, vectors, model):
-            results = sync_index(raw_dir, store=store, vectors=vectors, embedding_model=model)
+            results = sync_index(
+                raw_dir,
+                store=store,
+                vectors=vectors,
+                embedding_model=model,
+                drop_index_like_chunks=not keep_index_chunks,
+            )
     except ModelError as exc:
         _error_payload(exc.code, str(exc))
         return EXIT_ERROR
@@ -317,6 +465,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error('ask requires a question, for example: rag-agent ask "问题"')
         return _ask(question)
 
+    if args.command == "answer":
+        question = (args.argument or "").strip()
+        if not question:
+            parser.error('answer requires a question, for example: rag-agent answer "主刷卡住"')
+        return _answer(
+            question,
+            top_k=args.top_k,
+            threshold=args.threshold,
+            source=args.source,
+            stream=args.stream,
+        )
+
     if args.command == "search":
         query = (args.argument or "").strip()
         if not query:
@@ -338,10 +498,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         path = (args.argument or "").strip()
         if not path:
             parser.error("ingest requires a file or directory path")
-        return _ingest(path, force=args.force)
+        return _ingest(path, force=args.force, keep_index_chunks=args.keep_index_chunks)
 
     if args.command == "reindex":
-        return _reindex()
+        return _reindex(keep_index_chunks=args.keep_index_chunks)
 
     if args.command == "delete-document":
         source = (args.argument or "").strip()

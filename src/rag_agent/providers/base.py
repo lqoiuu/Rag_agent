@@ -6,7 +6,7 @@ classes, so application code depends on behaviour instead of a vendor SDK.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -130,6 +130,18 @@ class ChatModel(Protocol):
 
     def chat(self, messages: Sequence[ChatMessage], *, temperature: float = 0.0) -> ChatResponse:
         """Return one assistant reply for the given conversation."""
+
+        ...
+
+    def stream_chat(
+        self, messages: Sequence[ChatMessage], *, temperature: float = 0.0
+    ) -> Iterator[str]:
+        """Yield reply text incrementally, in provider order.
+
+        Deltas are plain text fragments; concatenating them reproduces the full
+        reply. Implementations must not retry after the first delta, otherwise
+        the caller would see duplicated output.
+        """
 
         ...
 

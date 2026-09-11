@@ -174,6 +174,25 @@ def test_defaults_are_the_documented_starting_points() -> None:
     assert config.threshold == DEFAULT_THRESHOLD
 
 
+def test_margin_reports_the_gap_between_the_two_best_hits() -> None:
+    retriever = make_retriever("第一段内容", "第二段内容", "第三段内容")
+
+    result = retriever.search("第一段内容", top_k=3)
+
+    assert len(result.hits) >= 2
+    assert result.margin == round(result.hits[0].score - result.hits[1].score, 6)
+    assert result.as_dict()["margin"] == result.margin
+
+
+def test_margin_is_none_with_a_single_hit() -> None:
+    retriever = make_retriever("唯一分片")
+
+    result = retriever.search("唯一分片", top_k=1)
+
+    assert result.margin is None
+    assert result.as_dict()["margin"] is None
+
+
 def test_result_serialises_for_reports() -> None:
     retriever = make_retriever("主刷卡住")
 

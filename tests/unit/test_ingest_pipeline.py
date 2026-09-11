@@ -275,3 +275,63 @@ def test_embed_chunks_respects_the_provider_batch_size() -> None:
     assert len(vectors) == 23
     assert model.embedded[0] == "内容0"
     assert model.embedded[-1] == "内容22"
+
+
+def toc_entry(title: str, page: int, dots: int = 70) -> str:
+    """Build one table-of-contents line with dot leaders."""
+
+    return f"{title} {'.' * dots}{page}"
+
+
+TABLE_OF_CONTENTS = "\n".join(
+    (
+        "3",
+        "目录",
+        toc_entry("1. 产品组成", 4),
+        toc_entry(" 1.1 包装内容物", 4),
+        toc_entry(" 1.2 部件名称", 4),
+        toc_entry("2. 产品使用", 8),
+        toc_entry("     2.1 注意事项", 8),
+    )
+)
+
+
+def test_index_like_chunks_are_dropped_before_embedding(
+    stores: tuple[MetadataStore, ChunkVectorStore],
+) -> None:
+    store, vectors = stores
+    model = RecordingEmbeddingModel()
+    document = make_document([TABLE_OF_CONTENTS + "\n\n" + "正常的说明文字。" * 40])
+
+    result = index_document(
+        document, store=store, vectors=vectors, embedding_model=model, config=SMALL_CHUNKS
+    )
+
+    total = len(split_document(document, SMALL_CHUNKS))
+    assert result.dropped_chunks >= 1
+    assert result.chunk_count == total - result.dropped_chunks
+    assert result.vector_count == result.chunk_count
+    assert result.as_dict()["dropped_chunks"] == result.dropped_chunks
+    assert "目录" not in " ".join(model.embedded)
+
+
+def test_index_like_chunks_can_be_kept(
+    stores: tuple[MetadataStore, ChunkVectorStore],
+) -> None:
+    store, vectors = stores
+    model = RecordingEmbeddingModel()
+    document = make_document([TABLE_OF_CONTENTS + "\n\n" + "正常的说明文字。" * 40])
+
+    result = index_document(
+        document,
+        store=store,
+        vectors=vectors,
+        embedding_model=model,
+        config=SMALL_CHUNKS,
+        drop_index_like_chunks=False,
+    )
+
+    total = len(split_document(document, SMALL_CHUNKS))
+    assert result.dropped_chunks == 0
+    assert result.chunk_count == total
+    assert "目录" in " ".join(model.embedded)

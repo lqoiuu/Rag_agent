@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 from rag_agent.providers.base import (
     ChatMessage,
@@ -38,14 +38,18 @@ class FakeChatModel:
         errors: Sequence[ModelError] = (),
         model_name: str = "fake-chat",
         latency_ms: float = 0.0,
+        stream_chunk_chars: int = 4,
     ) -> None:
         if responses is None and responder is None:
             raise ValueError("FakeChatModel needs either responses or a responder")
+        if stream_chunk_chars <= 0:
+            raise ValueError("stream_chunk_chars must be positive")
         self._responses = list(responses) if responses is not None else []
         self._responder = responder
         self._errors = list(errors)
         self._model_name = model_name
         self._latency_ms = latency_ms
+        self._stream_chunk_chars = stream_chunk_chars
         self.calls: list[tuple[ChatMessage, ...]] = []
 
     @property
@@ -86,6 +90,16 @@ class FakeChatModel:
             attempts=1,
             usage=ChatUsage(),
         )
+
+    def stream_chat(
+        self, messages: Sequence[ChatMessage], *, temperature: float = 0.0
+    ) -> Iterator[str]:
+        """Yield the scripted reply in small deterministic chunks."""
+
+        text = self.chat(messages, temperature=temperature).text
+        size = self._stream_chunk_chars
+        for start in range(0, len(text), size):
+            yield text[start : start + size]
 
 
 class FakeEmbeddingModel:

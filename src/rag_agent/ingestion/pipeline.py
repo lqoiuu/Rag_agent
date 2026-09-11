@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from rag_agent.domain.documents import DocumentChunk, SourceDocument
 from rag_agent.domain.errors import IngestionError
+from rag_agent.ingestion.filters import is_index_like
 from rag_agent.ingestion.loaders import iter_supported_files, load_document, source_name
 from rag_agent.ingestion.splitters import ChunkingConfig, split_document
 from rag_agent.providers.base import EmbeddingModel, ModelError
@@ -50,6 +51,7 @@ class IngestResult:
     document_id: str | None = None
     chunk_count: int = 0
     vector_count: int = 0
+    dropped_chunks: int = 0
     error_code: str | None = None
     error_message: str | None = None
 
@@ -64,6 +66,7 @@ class IngestResult:
             "document_id": self.document_id,
             "chunk_count": self.chunk_count,
             "vector_count": self.vector_count,
+            "dropped_chunks": self.dropped_chunks,
             "error_code": self.error_code,
             "error_message": self.error_message,
         }
@@ -96,6 +99,7 @@ def index_document(
     embedding_model: EmbeddingModel,
     config: ChunkingConfig | None = None,
     force: bool = False,
+    drop_index_like_chunks: bool = True,
 ) -> IngestResult:
     """Index one loaded document, skipping work that is already up to date."""
 
@@ -128,11 +132,20 @@ def index_document(
         chunks = split_document(document, config)
         if not chunks:
             raise IngestionError("document produced no chunks", source=document.source)
-        written = vectors.upsert(chunks, embed_chunks(embedding_model, chunks))
+        kept = (
+            tuple(chunk for chunk in chunks if not is_index_like(chunk.content))
+            if drop_index_like_chunks
+            else chunks
+        )
+        if not kept:
+            raise IngestionError(
+                "every chunk of the document was filtered out", source=document.source
+            )
+        written = vectors.upsert(kept, embed_chunks(embedding_model, kept))
         stale = [
             chunk_id
             for chunk_id in vectors.ids_for_document(document.document_id)
-            if chunk_id not in {chunk.chunk_id for chunk in chunks}
+            if chunk_id not in {chunk.chunk_id for chunk in kept}
         ]
         vectors.delete_ids(stale)
     except (IngestionError, ModelError, ValueError) as exc:
@@ -167,7 +180,7 @@ def index_document(
             version=document.version,
             size_bytes=document.size_bytes,
             page_count=document.page_count,
-            chunk_count=len(chunks),
+            chunk_count=len(kept),
             embedding_model=model_name,
             updated_at=utc_now(),
         )
@@ -180,13 +193,14 @@ def index_document(
             started_at=started_at,
             finished_at=utc_now(),
             document_id=document.document_id,
-            chunk_count=len(chunks),
+            chunk_count=len(kept),
         )
     )
     LOGGER.info(
-        "indexed source=%s chunks=%d written=%d replacement=%s",
+        "indexed source=%s chunks=%d dropped_index_like=%d written=%d replacement=%s",
         document.source,
-        len(chunks),
+        len(kept),
+        len(chunks) - len(kept),
         written,
         stored is not None,
     )
@@ -194,8 +208,9 @@ def index_document(
         source=document.source,
         status=INDEXED,
         document_id=document.document_id,
-        chunk_count=len(chunks),
+        chunk_count=len(kept),
         vector_count=vectors.count_for_document(document.document_id),
+        dropped_chunks=len(chunks) - len(kept),
     )
 
 
@@ -208,6 +223,7 @@ def ingest_path(
     root: Path | None = None,
     config: ChunkingConfig | None = None,
     force: bool = False,
+    drop_index_like_chunks: bool = True,
 ) -> IngestResult:
     """Load one file and index it, recording a failed job when loading fails."""
 
@@ -238,6 +254,7 @@ def ingest_path(
         embedding_model=embedding_model,
         config=config,
         force=force,
+        drop_index_like_chunks=drop_index_like_chunks,
     )
 
 
@@ -249,6 +266,7 @@ def ingest_directory(
     embedding_model: EmbeddingModel,
     config: ChunkingConfig | None = None,
     force: bool = False,
+    drop_index_like_chunks: bool = True,
 ) -> tuple[IngestResult, ...]:
     """Index every supported file under ``directory``, isolating failures."""
 
@@ -262,6 +280,7 @@ def ingest_directory(
             root=root,
             config=config,
             force=force,
+            drop_index_like_chunks=drop_index_like_chunks,
         )
         for path in iter_supported_files(root)
     )
@@ -274,6 +293,7 @@ def sync_index(
     vectors: ChunkVectorStore,
     embedding_model: EmbeddingModel,
     config: ChunkingConfig | None = None,
+    drop_index_like_chunks: bool = True,
 ) -> tuple[IngestResult, ...]:
     """Rebuild every file under ``directory`` and drop documents that vanished."""
 
@@ -286,6 +306,7 @@ def sync_index(
             embedding_model=embedding_model,
             config=config,
             force=True,
+            drop_index_like_chunks=drop_index_like_chunks,
         )
     )
     for stored in store.list_documents():
