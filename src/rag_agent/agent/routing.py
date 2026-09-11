@@ -12,9 +12,9 @@ This module is where that is corrected. It is deliberately tiny and pure:
 * it can only ever move a classification **towards** ``device``;
 * it requires a device label that is already resolvable from the text, so it cannot
   invent a device that was never mentioned;
-* it stays out of the way unless the message is a *referential* follow-up, which is
-  why a message that names a knowledge topic is left alone even when a device is in
-  play.
+* it fires when the message either points back at the previous turn or asks about a
+  field that exists only in the device store, and it stays out of the way when the
+  message names a product-knowledge topic.
 
 Everything here is a plain function over strings, so the boundaries can be tested by
 enumeration instead of hope.
@@ -44,14 +44,38 @@ REFERENTIAL_CUES = (
     "呢?",
 )
 
+#: Fields that exist only in the device store, never in the product manual. A question
+#: about one of these is a device-record question even when the device is named outright
+#: instead of referred to as "it".
+#:
+#: This list is what makes the correction fire in the commonest case. The rule originally
+#: required a *referential* follow-up, so "D2002 还在保修吗" -- a plainly named device with
+#: an unambiguous record question -- was still misrouted to the knowledge branch whenever
+#: the model classified it as knowledge, and the user got a refusal they could not act on.
+#: That is exactly what happened in the running UI.
+DEVICE_RECORD_CUES = (
+    "保修",
+    "订单",
+    "购买",
+    "下单",
+    "激活",
+    "到期",
+    "过保",
+    "在保",
+    "序列号",
+    "我的设备",
+    "我的机器",
+)
+
 #: Words that mean the question is about product knowledge rather than about this
 #: device's records. Their presence cancels the correction, so "那它的耗电量是多少"
 #: stays a knowledge question instead of becoming a device lookup. The cost is a
 #: miss, never a hijack.
 #:
-#: Warranty and duration words are deliberately *absent*: "还在保修吗", "保修期到多长
-#: 时间" and "订单还有多久" are answerable only from the device store, so treating them
-#: as knowledge topics would suppress the very follow-up this correction exists for.
+#: Warranty and duration words are deliberately *absent* from this list: "还在保修吗",
+#: "保修期到多长时间" and "订单还有多久" are answerable only from the device store, so
+#: treating them as knowledge topics would suppress the very case this correction exists
+#: for. They live in :data:`DEVICE_RECORD_CUES` instead.
 KNOWLEDGE_TOPIC_WORDS = (
     "型号",
     "参数",
@@ -91,6 +115,12 @@ def is_referential(question: str) -> bool:
     return any(cue in question for cue in REFERENTIAL_CUES)
 
 
+def asks_about_device_records(question: str) -> bool:
+    """True when the message asks about a field only the device store holds."""
+
+    return any(cue in question for cue in DEVICE_RECORD_CUES)
+
+
 def mentions_knowledge_topic(question: str) -> bool:
     """True when the message is about product knowledge rather than device records.
 
@@ -104,13 +134,14 @@ def mentions_knowledge_topic(question: str) -> bool:
 def prefer_device(question: str, device_id: str | None, intent: str) -> bool:
     """Whether a model classification should be corrected to ``device``.
 
-    Each of the four conditions guards against a different mistake:
+    Each condition guards against a different mistake:
 
     * the intent must be replaceable -- never ``ticket``;
     * a device id must already be resolvable -- never invent one;
-    * the question must be referential -- a message that mentions a device is not
-      automatically about that device's records;
-    * the question must not name a knowledge topic -- otherwise a real knowledge
+    * the message must be about this device: it either points back at the previous turn
+      or asks about a device-record field, so a message that merely happens to mention a
+      device label is not captured;
+    * the message must not name a product-knowledge topic -- otherwise a real knowledge
       question gets hijacked into a device listing.
     """
 
@@ -118,13 +149,17 @@ def prefer_device(question: str, device_id: str | None, intent: str) -> bool:
         return False
     if not device_id:
         return False
-    return is_referential(question) and not mentions_knowledge_topic(question)
+    if not (is_referential(question) or asks_about_device_records(question)):
+        return False
+    return not mentions_knowledge_topic(question)
 
 
 __all__ = [
+    "DEVICE_RECORD_CUES",
     "KNOWLEDGE_TOPIC_WORDS",
     "REFERENTIAL_CUES",
     "REPLACEABLE_INTENTS",
+    "asks_about_device_records",
     "is_referential",
     "mentions_knowledge_topic",
     "prefer_device",

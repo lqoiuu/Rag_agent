@@ -63,23 +63,24 @@ def test_second_turn_reads_the_first_turn_message(conversations: Any) -> None:
         intent_reply("knowledge"),
         answer_reply(MANUAL_PAGE_27),
     )
-    first = chat_turn(graph, "D2002 还在保修吗", thread_id="T1", user_id="U1001")
+    # 用知识问题建立历史：设备类问题会被改判到设备分支，不适合用来验证知识记忆。
+    first = chat_turn(graph, "制造商地址在哪里", thread_id="T1", user_id="U1001")
     graph.update_state(
         {"configurable": {"thread_id": "T1"}},
         {
             "messages": [
-                {"role": "user", "content": "D2002 还在保修吗"},
+                {"role": "user", "content": "制造商地址在哪里"},
                 {"role": "assistant", "content": first.run.answer},
             ]
         },
     )
 
-    second = chat_turn(graph, "那它的型号是什么", thread_id="T1", user_id="U1001")
+    second = chat_turn(graph, "那它的售后电话呢", thread_id="T1", user_id="U1001")
 
     assert second.run.status == STATUS_ANSWERED
     # 第二轮把第一轮的两条消息放进 Prompt：这就是「多轮」的实际证据
     prompt = model.calls[-1][-1].content
-    assert "D2002 还在保修吗" in prompt
+    assert "制造商地址在哪里" in prompt
     assert "用户：" in prompt and "助手：" in prompt
 
 

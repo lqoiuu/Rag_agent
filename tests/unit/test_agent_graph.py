@@ -288,3 +288,28 @@ def test_tool_layer_also_refuses_unconfirmed_writes() -> None:
 
         assert result.error_code == "confirmation_required"
         assert repository.list_tickets() == ()
+
+
+def test_the_graph_routes_a_misclassified_device_question_to_the_tools() -> None:
+    """The reroute must change the graph's path, not just a helper's return value.
+
+    The scripted model answers ``knowledge`` for a question that names a device and asks
+    about warranty — the misclassification observed in the running UI. Without the
+    correction the knowledge branch searches the manual, does not find D2002 there, and
+    refuses; the device branch answers with the expiry date.
+    """
+
+    with agent_dependencies(intent_reply("knowledge")) as (retriever, model, repository):
+        run = run_agent(
+            "D2002 还在保修吗",
+            retriever=retriever,
+            chat_model=model,
+            repository=repository,
+            user_id="U1001",
+        )
+
+    assert run.intent == "device"
+    assert run.status == STATUS_ANSWERED
+    assert "2028-01-10" in run.answer
+    assert run.trace[0] == "classify:device:rerouted-from-knowledge"
+    assert run.tool_results[0]["tool"] == "device.lookup"
