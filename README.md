@@ -100,8 +100,7 @@ uv sync
 
 ## 尚未实现
 
-- 用户、设备、订单和工单工具。
-- LangGraph Agent 工作流。
+- 多轮会话、Checkpoint 与人工确认的暂停恢复。
 - Streamlit 页面。
 - 矢量轮廓（文字转曲线）PDF 的文本提取，需要 OCR，当前明确不支持。
 
