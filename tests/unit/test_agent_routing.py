@@ -17,6 +17,7 @@ from rag_agent.agent.routing import (
     is_referential,
     mentions_knowledge_topic,
     prefer_device,
+    prefer_knowledge_for_stream,
 )
 
 FOLLOW_UP = "那它的保修期是多久"
@@ -109,3 +110,20 @@ def test_the_two_word_lists_never_contradict_each_other() -> None:
 
     overlap = set(DEVICE_RECORD_CUES) & set(KNOWLEDGE_TOPIC_WORDS)
     assert overlap == set(), f"这些词同时出现在两张表里：{sorted(overlap)}"
+
+
+@pytest.mark.parametrize(
+    ("intent", "expected"),
+    [
+        ("knowledge", True),
+        # 判不出来时仍可尝试作答：真的没资料会被引用校验拒掉
+        ("unknown", True),
+        # 这两个分支流式路径根本没有，必须交给完整智能体
+        ("device", False),
+        ("ticket", False),
+    ],
+)
+def test_streaming_only_keeps_what_the_knowledge_path_can_answer(
+    intent: str, expected: bool
+) -> None:
+    assert prefer_knowledge_for_stream(intent) is expected

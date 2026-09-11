@@ -73,6 +73,9 @@ def render_tool_results(results: tuple[dict[str, Any], ...]) -> None:
 def render_turn(turn: Any, *, show_history: bool) -> None:
     """Render one turn: this turn's activity, then its answer, then citations."""
 
+    if turn.run.intent_source == "delegated":
+        return
+
     label, colour = STATUS_LABELS.get(turn.status, (turn.status, "gray"))
     st.badge(label, color=colour, icon=":material/label:")
     st.caption(f"意图：`{turn.run.intent}` · 会话窗口：{len(turn.window.messages)} 条消息")
@@ -127,6 +130,7 @@ def stream_answer(question: str) -> tuple[Any, str]:
             thread_id=st.session_state.thread_id,
             window_size=resources.settings.conversation_window_size,
             preferences=resources.conversations.load_preferences(st.session_state.user_id or None),
+            delegate_to_agent=True,
         ):
             if candidate is not None:
                 turn = candidate
@@ -245,6 +249,15 @@ resources = get_resources()
 if st.session_state.flash:
     st.success(st.session_state.pop("flash"), icon=":material/task_alt:")
 
+if st.session_state.delegated_from:
+    st.info(
+        f"上一轮被判定为 `{st.session_state.delegated_from}`，而「流式生成」只走知识问答，"
+        "查不到设备也建不了工单，因此已自动改用完整智能体回答。"
+        "想全程走设备与工单流程时，请关闭上方开关。",
+        icon=":material/swap_horiz:",
+    )
+    st.session_state.delegated_from = None
+
 st.caption(
     "下面显示的是**本次浏览器会话**的对话记录；智能体的记忆保存在 SQLite Checkpoint 里，"
     "按会话编号隔离，刷新页面后仍可继续。"
@@ -272,6 +285,13 @@ if prompt := st.chat_input("问一个售后问题，例如：D2002 还在保修�
     with st.chat_message("assistant"):
         if stream_mode:
             turn, _raw = stream_answer(prompt)
+            if turn is not None and turn.run.intent_source == "delegated":
+                # 流式路径只能答知识问题：这类请求改由完整智能体处理。原因记进会话状态，
+                # 由下一趟渲染显示——它描述的是「换了处理路径」，属于页面的说明而不是
+                # 这一轮回答的一部分，而且这样刷新后仍然看得见。
+                st.session_state.delegated_from = turn.run.intent
+                with st.spinner("正在改用完整智能体…"):
+                    turn = run_agent_turn(prompt)
         else:
             with st.spinner("正在处理…"):
                 turn = run_agent_turn(prompt)

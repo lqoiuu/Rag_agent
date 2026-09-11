@@ -131,6 +131,23 @@ def mentions_knowledge_topic(question: str) -> bool:
     return any(word in stripped for word in KNOWLEDGE_TOPIC_WORDS)
 
 
+#: Intents the streaming knowledge path can actually answer. Anything else must be handed
+#: to the full agent, because the streaming path does not run the classifier and therefore
+#: has no way to reach the device tools or the ticket flow.
+STREAMABLE_INTENTS = ("knowledge", "unknown")
+
+
+def prefer_knowledge_for_stream(intent: str) -> bool:
+    """Whether the knowledge-only streaming path should handle this question itself.
+
+    ``unknown`` stays here on purpose: an unclassifiable question is still worth a
+    grounded attempt, and a genuinely unanswerable one is refused by the citation checks
+    anyway.
+    """
+
+    return intent in STREAMABLE_INTENTS
+
+
 def prefer_device(question: str, device_id: str | None, intent: str) -> bool:
     """Whether a model classification should be corrected to ``device``.
 
@@ -159,8 +176,10 @@ __all__ = [
     "KNOWLEDGE_TOPIC_WORDS",
     "REFERENTIAL_CUES",
     "REPLACEABLE_INTENTS",
+    "STREAMABLE_INTENTS",
     "asks_about_device_records",
     "is_referential",
     "mentions_knowledge_topic",
     "prefer_device",
+    "prefer_knowledge_for_stream",
 ]

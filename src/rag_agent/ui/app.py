@@ -56,6 +56,7 @@ def initialise_session() -> None:
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("pending_action", None)
     st.session_state.setdefault("last_turn", None)
+    st.session_state.setdefault("delegated_from", None)
     st.session_state.setdefault("flash", None)
 
 
@@ -74,6 +75,7 @@ def reset_conversation() -> None:
     st.session_state.messages = []
     st.session_state.pending_action = None
     st.session_state.last_turn = None
+    st.session_state.delegated_from = None
 
 
 def sidebar() -> None:

@@ -242,10 +242,10 @@ def test_search_page_reports_hits_for_an_indexed_chunk(ui: Any) -> None:
 
 
 def test_streaming_toggle_uses_the_knowledge_path(ui: Any) -> None:
-    """With streaming on, the turn runs and reports the path's own checkpoint behaviour.
+    """With streaming on, a knowledge turn runs through the streaming path.
 
-    The streaming path reads memory without writing a checkpoint, so it reports
-    ``checkpoints_after == checkpoints_before``. That difference is asserted rather than
+    That path reads memory without writing a checkpoint, so it reports
+    ``checkpoints_after == checkpoints_before``. The difference is asserted rather than
     papered over.
     """
 
@@ -259,6 +259,33 @@ def test_streaming_toggle_uses_the_knowledge_path(ui: Any) -> None:
 
     assert not app.exception, exceptions(app)
     turn = app.session_state["messages"][1]["turn"]
-    assert turn.run.intent == "knowledge"
     assert turn.run.intent_source == "stream"
     assert turn.checkpoints_after == turn.checkpoints_before
+
+
+def test_streaming_hands_a_device_question_to_the_full_agent(ui: Any) -> None:
+    """The regression from the running UI: a device question must not be refused.
+
+    Streaming cannot reach the device tools, so it used to answer from the knowledge base
+    and refuse with "the documents do not mention D2002" — which reads as a missing
+    document rather than as a mode limitation. The page must now say what happened and
+    answer through the full agent.
+    """
+
+    from agent_test_support import intent_reply
+
+    ui(intent_reply("device"), intent_reply("device"))
+
+    app = run_app()
+    app.toggle[0].set_value(True).run()
+    app.chat_input[0].set_value("D2002 还在保修吗").run()
+
+    assert not app.exception, exceptions(app)
+    notices = [info.value for info in app.info]
+    assert any("只走知识问答" in text for text in notices), notices
+    assert any("device" in text for text in notices), notices
+
+    final = app.session_state["last_turn"]
+    assert final.run.intent_source != "delegated"
+    assert "2028-01-10" in final.run.answer
+    assert final.turn_tool_results[0]["tool"] == "device.lookup"

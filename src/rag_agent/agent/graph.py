@@ -25,8 +25,9 @@ from typing import Any, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from rag_agent.agent.intent import Intent
+from rag_agent.agent.intent import Intent, classify_intent
 from rag_agent.agent.nodes import DEFAULT_MAX_CLARIFICATIONS, AgentNodes
+from rag_agent.agent.routing import prefer_knowledge_for_stream
 from rag_agent.agent.state import (
     STATUS_ANSWERED,
     STATUS_ERROR,
@@ -413,6 +414,7 @@ def stream_chat_turn(
     window_size: int = DEFAULT_WINDOW_SIZE,
     preferences: dict[str, str] | None = None,
     max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+    delegate_to_agent: bool = False,
     temperature: float = 0.0,
 ) -> Iterator[tuple[str, ChatTurn | None]]:
     """Run a knowledge turn with the thread's memory, streaming as it goes.
@@ -431,6 +433,15 @@ def stream_chat_turn(
     from the compiled graph, so nothing here depends on LangGraph's node internals. The
     model output is the grounded JSON, so chunks exist for progress display only: callers
     render ``turn.run.answer``, never the raw stream.
+
+    This path answers from the knowledge base only: it does not run the classifier, so it
+    cannot route to the device tools or the ticket flow. ``delegate_to_agent`` makes that
+    limit actionable instead of silent — when intent classification is available and the
+    question is not a knowledge question, the turn is returned with
+    ``intent_source == "delegated"`` and an empty answer, so the caller can hand the
+    question to the full agent rather than showing a refusal that looks like a missing
+    document. ``intent`` is left as ``device``/``ticket`` so the caller knows where to send
+    it; a wrong guess degrades to an ordinary clarification, never to a lost question.
     """
 
     preferences = preferences or {}
@@ -440,6 +451,22 @@ def stream_chat_turn(
     )
     prompt_context = render_prompt_context(window, preferences)
     checkpoints_before = _count_checkpoints(graph, thread_id)
+
+    if delegate_to_agent:
+        decision = classify_intent(question, chat_model=chat_model, context=prompt_context)
+        if not prefer_knowledge_for_stream(str(decision.intent)):
+            yield (
+                "",
+                _delegated_turn(
+                    thread_id,
+                    question,
+                    window,
+                    preferences,
+                    str(decision.intent),
+                    checkpoints_before,
+                ),
+            )
+            return
 
     prepared = prepare_answer(question, retriever=retriever, max_context_chars=max_context_chars)
     if prepared.refusal is not None:
@@ -464,6 +491,48 @@ def stream_chat_turn(
         latency_ms=(time.perf_counter() - started) * 1000.0,
     )
     yield "", _stream_turn(thread_id, window, preferences, answer, checkpoints_before)
+
+
+def _delegated_turn(
+    thread_id: str,
+    question: str,
+    window: ConversationWindow,
+    preferences: dict[str, str],
+    intent: str,
+    checkpoints_before: int,
+) -> ChatTurn:
+    """A turn that the knowledge-only stream declines to answer, for the caller to route.
+
+    The answer is deliberately empty and ``intent_source`` is ``"delegated"``. Showing a
+    refusal here would be wrong twice over: the question is not unanswerable, it just needs
+    a branch this path does not have, and a refusal reads as "the documents do not cover
+    it" — which is what the running UI showed for a simple device lookup.
+    """
+
+    return ChatTurn(
+        thread_id=thread_id,
+        run=AgentRun(
+            question=question,
+            status=STATUS_REFUSED,
+            intent=intent,
+            intent_confidence=0.0,
+            intent_source="delegated",
+            answer="",
+            citations=(),
+            trace=(f"stream:delegated:{intent}",),
+            tool_results=(),
+            pending_confirmation=None,
+            created_ticket=None,
+            error_code=None,
+            error_message="",
+            clarification_turns=0,
+        ),
+        window=window,
+        preferences=dict(preferences),
+        pending_action=None,
+        checkpoints_before=checkpoints_before,
+        checkpoints_after=checkpoints_before,
+    )
 
 
 def _stream_turn(
