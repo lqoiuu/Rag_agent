@@ -9,6 +9,7 @@ the confirmation step before a write — out of reach of the model.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from langgraph.types import interrupt
@@ -35,6 +36,12 @@ from rag_agent.tools.models import CreateTicketArgs, DeviceLookupArgs, OrderLook
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_CLARIFICATIONS = 3
+
+#: Matches a device label such as ``D2002`` in a user message or in the recent
+#: conversation. Deliberately strict: an uppercase ``D`` followed by digits only.
+#: The simulated ids are ``D2001`` to ``D2005``, and no model name in the knowledge
+#: base has this shape, so a false positive would have to be invented by the user.
+DEVICE_ID_PATTERN = re.compile(r"\bD\d{3,}\b")
 
 TICKET_EXTRACT_SYSTEM_PROMPT = (
     "从用户消息和已知信息中提取报修工单需要的字段。\n"
@@ -120,7 +127,7 @@ class AgentNodes:
         user_id = (state.get("user_id") or "").strip()
         if not user_id:
             return self._needs_input(state, ["user_id"], stage="device")
-        requested_device = (state.get("device_id") or "").strip() or None
+        requested_device = resolve_device_id(state)
 
         results: list[dict[str, object]] = []
         device_result = device_lookup(
@@ -330,6 +337,35 @@ def _is_confirmed(decision: object) -> bool:
     if isinstance(decision, dict):
         return decision.get("confirmed") is True
     return False
+
+
+def resolve_device_id(state: AgentState) -> str | None:
+    """Find the device this turn is about, without asking the model.
+
+    The value comes from the caller first, then from the text: the current message
+    is the strongest signal, and the conversation window is what makes a follow-up
+    such as "那它的保修期是多久" resolvable at all.
+
+    This is deliberately a *deterministic* extraction instead of another model call.
+    Before it existed, the device id could only arrive through the ``--device-id``
+    flag, so asking "D2002 还在保修吗" in a message listed every device instead of
+    answering about D2002 — and once a previous turn was rendered into the prompt,
+    the same follow-up was classified as a knowledge question often enough to turn
+    the whole flow into a refusal.
+
+    Ownership is *not* checked here. The extracted id is handed to the tool exactly
+    like a caller-supplied one, so a device belonging to somebody else still fails
+    with ``permission_denied`` instead of being silently skipped.
+    """
+
+    supplied = (state.get("device_id") or "").strip()
+    if supplied:
+        return supplied
+    for text in (state.get("question", ""), state.get("prompt_context", "")):
+        match = DEVICE_ID_PATTERN.search(text or "")
+        if match:
+            return match.group(0).upper()
+    return None
 
 
 def _as_text(value: object) -> str | None:

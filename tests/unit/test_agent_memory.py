@@ -164,6 +164,56 @@ def test_a_second_resume_cannot_write_twice(conversations: Any) -> None:
     assert len(repository.list_tickets()) == 1
 
 
+def test_device_turn_resolves_the_device_from_the_message(conversations: Any) -> None:
+    """The device id must come from the message, not only from a CLI flag.
+
+    Without this the node listed every device of the user instead of answering about
+    the one that was named.
+    """
+
+    graph, _model, _repository = conversations(intent_reply("device"))
+
+    turn = chat_turn(graph, "D2002 还在保修吗", thread_id="T1", user_id="U1001")
+
+    assert turn.run.status == STATUS_ANSWERED
+    payload = turn.run.tool_results[0]["data"]
+    assert isinstance(payload, dict)
+    device = payload["device"]
+    assert isinstance(device, dict)
+    assert device["device_id"] == "D2002"
+
+
+def test_follow_up_keeps_working_once_history_is_in_the_prompt(conversations: Any) -> None:
+    """The regression that motivated resolving the device id deterministically.
+
+    Measured with the real model: the same follow-up was classified as a device
+    question with no history and as a knowledge question once one turn of history was
+    rendered into the prompt, which turned it into a refusal.
+    """
+
+    graph, _model, _repository = conversations(intent_reply("device"), intent_reply("device"))
+    first = chat_turn(graph, "D2002 还在保修吗", thread_id="T1", user_id="U1001")
+    graph.update_state(
+        {"configurable": {"thread_id": "T1"}},
+        {
+            "messages": [
+                {"role": "user", "content": "D2002 还在保修吗"},
+                {"role": "assistant", "content": first.run.answer},
+            ]
+        },
+    )
+
+    second = chat_turn(graph, "那它的保修期是多久", thread_id="T1", user_id="U1001")
+
+    assert second.run.status == STATUS_ANSWERED
+    assert second.window.messages  # 历史确实进了窗口
+    payload = second.run.tool_results[0]["data"]
+    assert isinstance(payload, dict)
+    device = payload["device"]
+    assert isinstance(device, dict)
+    assert device["device_id"] == "D2002"
+
+
 def test_preferences_reach_the_prompt(conversations: Any) -> None:
     graph, model, _repository = conversations(
         intent_reply("knowledge"), answer_reply(MANUAL_PAGE_27)
