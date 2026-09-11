@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from rag_agent.agent import STATUS_ANSWERED, STATUS_TICKET_CREATED, run_agent
 from rag_agent.config import build_chat_model, build_embedding_model, get_settings
 from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
@@ -101,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
             "delete-document",
             "evaluate",
             "tool",
+            "agent",
         ),
         help="Command to execute.",
     )
@@ -179,6 +181,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--args",
         default="",
         help='JSON arguments for "tool", for example --args "{\\"user_id\\": \\"U1001\\"}".',
+    )
+    parser.add_argument("--user-id", default="", help='Caller id for the "agent" command.')
+    parser.add_argument("--device-id", default="", help='Device id for the "agent" command.')
+    parser.add_argument("--contact", default="", help='Contact for the "agent" command.')
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Treat the pending action as confirmed; stage 11 replaces this with a real resume.",
     )
     return parser
 
@@ -689,6 +699,62 @@ def _tool(argument: str, raw_args: str) -> int:
     return EXIT_OK if result.ok else EXIT_PARTIAL_FAILURE
 
 
+@contextmanager
+def _open_agent(
+    settings: Settings,
+) -> Iterator[tuple[Retriever, ChatModel, BusinessRepository]]:
+    """Open everything one agent run needs: retrieval, chat and business data."""
+
+    vectors = ChunkVectorStore(settings.chroma_dir)
+    with (
+        build_embedding_model(settings) as embedding_model,
+        build_chat_model(settings) as chat_model,
+        BusinessRepository(settings.sqlite_path) as repository,
+    ):
+        repository.seed_from_file(settings.data_dir / "business" / "seed.json")
+        yield (
+            Retriever(vectors=vectors, embedding_model=embedding_model),
+            chat_model,
+            repository,
+        )
+
+
+def _agent(
+    question: str,
+    *,
+    user_id: str,
+    device_id: str,
+    contact: str,
+    confirm: bool,
+) -> int:
+    """Run one turn of the LangGraph workflow and print its trace and result."""
+
+    settings = get_settings()
+    try:
+        with _open_agent(settings) as (retriever, chat_model, repository):
+            run = run_agent(
+                question,
+                retriever=retriever,
+                chat_model=chat_model,
+                repository=repository,
+                user_id=user_id or None,
+                device_id=device_id or None,
+                contact=contact or None,
+                confirmation={"confirmed": True} if confirm else None,
+            )
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    print(json.dumps(run.as_dict(), ensure_ascii=False, indent=2))
+    if run.status in (STATUS_ANSWERED, STATUS_TICKET_CREATED):
+        return EXIT_OK
+    return EXIT_PARTIAL_FAILURE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -764,6 +830,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "tool":
         return _tool(args.argument or "", args.args)
+
+    if args.command == "agent":
+        question = (args.argument or "").strip()
+        if not question:
+            parser.error(
+                'agent requires a question, for example: rag-agent agent "D2001 还在保修吗"'
+            )
+        return _agent(
+            question,
+            user_id=args.user_id,
+            device_id=args.device_id,
+            contact=args.contact,
+            confirm=args.confirm,
+        )
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

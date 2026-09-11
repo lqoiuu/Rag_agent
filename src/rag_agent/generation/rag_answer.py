@@ -18,6 +18,7 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from rag_agent.domain.citation import Citation
 from rag_agent.domain.retrieval import RetrievalHit, RetrievalResult
@@ -384,8 +385,13 @@ def finalize_answer(
     )
 
 
-def parse_model_payload(text: str) -> _ModelPayload | None:
-    """Extract the required JSON object from a model reply."""
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """Return the first JSON object inside a model reply, or None.
+
+    Models sometimes wrap the object in prose or a Markdown fence, so the first
+    ``{...}`` span is taken and parsed strictly; anything malformed yields None
+    and the caller decides how to degrade.
+    """
 
     match = _JSON_OBJECT.search(text)
     if match is None:
@@ -394,9 +400,15 @@ def parse_model_payload(text: str) -> _ModelPayload | None:
         payload = json.loads(match.group(0))
     except ValueError:
         return None
-    if not isinstance(payload, dict):
-        return None
+    return payload if isinstance(payload, dict) else None
 
+
+def parse_model_payload(text: str) -> _ModelPayload | None:
+    """Extract the required answer JSON object from a model reply."""
+
+    payload = extract_json_object(text)
+    if payload is None:
+        return None
     return _ModelPayload(
         status=str(payload.get("status", "")).strip().lower(),
         answer=str(payload.get("answer", "")).strip(),
