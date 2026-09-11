@@ -10,6 +10,7 @@ from memory_test_support import memory_database_uri
 from rag_agent.memory import (
     ConversationStore,
     ConversationWindow,
+    SQLiteCheckpointer,
     ThreadOwnershipError,
     render_prompt_context,
     trim_messages,
@@ -80,6 +81,28 @@ def test_context_labels_the_window_as_non_authoritative() -> None:
 def store() -> Iterator[ConversationStore]:
     with ConversationStore(memory_database_uri()) as opened:
         yield opened
+
+
+def test_store_shares_one_database_with_the_checkpointer() -> None:
+    """Both classes must resolve the same database target, URIs included.
+
+    ``ConversationStore`` used to pass the target straight to ``sqlite3.connect``
+    without ``uri=True``, so a ``file:...?mode=memory`` target became a literal file
+    on disk and the two classes silently used different databases. Nothing failed
+    loudly; the store just looked empty. This pins the two together.
+    """
+
+    uri = memory_database_uri()
+    with (
+        SQLiteCheckpointer(uri) as checkpointer,
+        ConversationStore(uri) as conversations,
+    ):
+        conversations.ensure_thread("T-shared", "U1001")
+
+        rows = checkpointer._connection.execute(
+            "SELECT user_id FROM _threads WHERE thread_id = ?", ("T-shared",)
+        ).fetchall()
+        assert [str(row["user_id"]) for row in rows] == ["U1001"]
 
 
 def test_thread_is_registered_with_its_owner(store: ConversationStore) -> None:

@@ -133,7 +133,11 @@ class ConversationStore:
         self._path = str(path)
         # See SQLiteCheckpointer: this database is touched from the thread that runs
         # the graph, so the connection must not be bound to its creating thread.
-        self._connection = sqlite3.connect(self._path, check_same_thread=False)
+        # ``uri=True`` matters for the same reason it does there: the checkpointer and
+        # this store must accept identical database targets, including URI filenames
+        # such as ``file:name?mode=memory&cache=shared``, instead of one of them
+        # silently treating the URI as a literal file name on disk.
+        self._connection = sqlite3.connect(self._path, check_same_thread=False, uri=True)
         self._connection.row_factory = sqlite3.Row
         self.initialize()
 

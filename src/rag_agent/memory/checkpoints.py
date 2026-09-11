@@ -68,7 +68,7 @@ class SQLiteCheckpointer(BaseCheckpointSaver[str]):
         # ``_lock`` is what makes it safe: every transaction is serialized through it
         # (see ``_transaction``).
         self._lock = threading.RLock()
-        self._connection = sqlite3.connect(self._path, check_same_thread=False)
+        self._connection = sqlite3.connect(self._path, check_same_thread=False, uri=True)
         self._connection.row_factory = sqlite3.Row
         self.initialize()
 
