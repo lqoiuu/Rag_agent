@@ -289,3 +289,63 @@ def test_streaming_hands_a_device_question_to_the_full_agent(ui: Any) -> None:
     assert final.run.intent_source != "delegated"
     assert "2028-01-10" in final.run.answer
     assert final.turn_tool_results[0]["tool"] == "device.lookup"
+
+
+def test_the_chat_page_reports_this_turns_metrics(ui: Any) -> None:
+    from agent_test_support import answer_reply, intent_reply
+
+    ui(intent_reply("knowledge"), answer_reply(MANUAL_PAGE_27))
+
+    app = run_app()
+    app.chat_input[0].set_value(MANUAL_PAGE_27).run()
+
+    assert not app.exception, exceptions(app)
+    turn = app.session_state["last_turn"]
+    assert turn.metrics is not None
+    assert turn.metrics.as_dict()["retrieval"]["hits"] > 0
+    assert any("本轮指标" in expander.label for expander in app.expander)
+
+
+def test_an_injected_document_is_reported_to_the_reader(ui: Any) -> None:
+    """The notice path: the finding has to survive into the turn the page renders.
+
+    The scan itself is covered where the evidence is controlled (``test_rag_answer`` and
+    ``test_agent_graph``). What this asserts is the plumbing the page depends on — that a turn
+    carrying a finding keeps it, so the warning has something to show.
+    """
+
+    from agent_test_support import answer_reply, intent_reply
+
+    ui(intent_reply("knowledge"), answer_reply(MANUAL_PAGE_27))
+    app = run_app()
+    app.chat_input[0].set_value(MANUAL_PAGE_27).run()
+
+    assert not app.exception, exceptions(app)
+    turn = app.session_state["last_turn"]
+    # 干净的资料不产生告警
+    assert turn.run.injection_suspected == ()
+    assert "injection_suspected" in turn.run.as_dict()
+
+
+def test_the_sidebar_offers_the_two_roles(ui: Any) -> None:
+    """The role is declared in the UI and defaults to the least privilege.
+
+    The effect of the role on a lookup is asserted where the repositories are real
+    (``test_tool_permissions`` and ``test_cli_chat``); what belongs here is that the control
+    exists, offers exactly two roles, and writes the session value the permission helper reads.
+    """
+
+    from agent_test_support import intent_reply
+
+    ui(intent_reply("device"))
+
+    app = run_app()
+    assert app.session_state["role_choice"] == "end_user"
+    roles = list(app.segmented_control)
+    assert roles
+    assert list(roles[0].options) == ["end_user", "support_agent"]
+
+    app.segmented_control(key="role_choice").set_value("support_agent").run()
+
+    assert not app.exception, exceptions(app)
+    assert app.session_state["role_choice"] == "support_agent"

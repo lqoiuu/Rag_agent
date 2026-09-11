@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from rag_agent.observability import TurnMetrics
+from rag_agent.observability import StageTiming, TurnMetrics
 
 
 def test_a_timed_stage_reports_its_own_duration() -> None:
@@ -95,6 +95,32 @@ def test_injection_labels_are_deduplicated() -> None:
     metrics.record_injection_findings(("override_instructions", "role_hijack"))
 
     assert metrics.injection_labels == ["override_instructions", "role_hijack"]
+
+
+def test_total_time_prefers_the_recorded_turn_stage() -> None:
+    """The measured turn wins over time-since-construction.
+
+    Building the collector after the work is the normal case in this project, and reporting
+    the elapsed time then produced "4.9 ms" for a turn that took seconds. This test exists
+    because that bug was silent: the number was plausible, just wrong by three orders of
+    magnitude.
+    """
+
+    metrics = TurnMetrics()
+    metrics.stages.append(StageTiming(name="turn", duration_ms=2640.0))
+
+    assert metrics.total_ms == 2640.0
+    assert metrics.as_dict()["total_ms"] == 2640.0
+
+
+def test_total_time_falls_back_to_elapsed_without_a_turn_stage() -> None:
+    metrics = TurnMetrics()
+
+    with metrics.stage("classify"):
+        time.sleep(0.01)
+
+    # 没有 turn 阶段时退回「自构造以来」，且至少覆盖刚刚那次 sleep
+    assert metrics.total_ms >= 10.0
 
 
 def test_as_dict_reports_the_stable_shape() -> None:

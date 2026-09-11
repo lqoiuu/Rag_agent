@@ -133,8 +133,21 @@ class TurnMetrics:
 
     @property
     def total_ms(self) -> float:
-        """Wall-clock time for the turn, measured from construction."""
+        """Wall-clock time for the turn.
 
+        A caller that measured the turn itself records it as the ``turn`` stage, and that
+        measurement wins. Otherwise the time since this collector was created is reported —
+        which is only right when the collector was built *before* the work started.
+
+        Relying on the elapsed time alone was a real bug: the collector is built after the
+        graph returns, so it reported a few milliseconds for a turn that took seconds. The
+        fallback is kept because a caller that only builds the collector afterwards would
+        otherwise silently report zero.
+        """
+
+        for stage in self.stages:
+            if stage.name == "turn":
+                return stage.duration_ms
         return (time.perf_counter() - self.started_at) * 1000.0
 
     @property
