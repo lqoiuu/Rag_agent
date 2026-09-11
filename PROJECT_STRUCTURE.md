@@ -28,12 +28,14 @@ rag-agent-assistant/
 │       ├── 0001-technology-stack.md
 │       └── 0002-provider-layer.md
 ├── data/
+│   ├── business/
+│   │   └── seed.json             # 模拟用户、设备、订单，随代码提交
 │   ├── eval/
 │   │   ├── qa_set.jsonl          # 评测集，随代码提交
 │   │   └── reports/              # 评测报告，随代码提交作为基线记录
 │   ├── raw/                      # 原始资料，本地数据，不提交
 │   ├── chroma/                   # 向量索引，本地数据，不提交
-│   └── rag_agent.sqlite3         # 元数据，本地数据，不提交
+│   └── rag_agent.sqlite3         # 元数据与业务数据，本地数据，不提交
 ├── src/
 │   └── rag_agent/
 │       ├── __init__.py
@@ -80,7 +82,13 @@ rag-agent-assistant/
 │       │   └── retriever.py
 │       ├── storage/
 │       │   ├── __init__.py
+│       │   ├── business.py
 │       │   └── sqlite.py
+│       ├── tools/
+│       │   ├── __init__.py
+│       │   ├── business.py
+│       │   ├── errors.py
+│       │   └── models.py
 │       └── vectorstore/
 │           ├── __init__.py
 │           └── chroma.py
@@ -91,6 +99,7 @@ rag-agent-assistant/
         ├── ingestion_test_support.py
         ├── model_test_support.py
         ├── pdf_fixtures.py
+        ├── test_business_repository.py
         ├── test_chroma_store.py
         ├── test_chunk_stats.py
         ├── test_cli_answer.py
@@ -98,6 +107,7 @@ rag-agent-assistant/
         ├── test_cli_chunk_report.py
         ├── test_cli_ingest.py
         ├── test_cli_search.py
+        ├── test_cli_tool.py
         ├── test_cli_evaluate.py
         ├── test_documents.py
         ├── test_eval_dataset.py
@@ -170,9 +180,13 @@ rag-agent-assistant/
 | src/rag_agent/storage/sqlite.py | SQLite 元数据存储：documents、document_versions、ingestion_jobs 三张表，按来源 upsert、查询、删除并记录任务 | sqlite3、事务、唯一约束、版本历史 |
 | src/rag_agent/vectorstore/__init__.py | 对外暴露向量存储与匹配结果接口 | 模块边界 |
 | src/rag_agent/vectorstore/chroma.py | Chroma 封装：按稳定 chunk ID 幂等 upsert、按文档取 ID 与内容、删除、向量查询并重建 DocumentChunk，支持按来源过滤 | 向量维度、距离度量、幂等写入、元数据回读 |
+| src/rag_agent/storage/business.py | 模拟用户、设备、订单、工单四张表与仓储接口，按 seed 文件幂等灌入，保修到期日按整数月计算 | SQLite、确定性数据、日期算术 |
+| src/rag_agent/tools/__init__.py | 对外暴露工具契约、错误类型与四个工具函数 | 模块边界 |
+| src/rag_agent/tools/models.py | Pydantic 参数与结果模型，含工单草稿、确认标记与派生幂等键 | Schema 校验、幂等键设计 |
+| src/rag_agent/tools/errors.py | 工具错误分类：not_found、permission_denied、invalid_argument、confirmation_required、conflict、unavailable | 工具边界、错误语义 |
+| src/rag_agent/tools/business.py | 四个契约化工具：用户、设备、订单查询与工单创建；失败转成结构化结果而不是字符串 | Function Calling 契约、权限、幂等性与读写风险 |
 | src/rag_agent/retrieval/__init__.py | 对外暴露检索器接口 | 模块边界 |
 | src/rag_agent/retrieval/retriever.py | 查询向量化、Top-K、来源过滤与阈值判定；单次调用可覆盖 top_k、threshold、source | 语义相似度、Top-K、阈值取舍 |
-
 | data/eval/qa_set.jsonl | 49 条评测用例（43 可回答、6 不可回答），含预期页码与参考答案 | 评测集设计、标注一致性 |
 | data/eval/reports/ | 每次评测生成的 Markdown 与 JSON 报告 | 基线记录、可复现性 |
 | src/rag_agent/evaluation/dataset.py | 加载并校验评测集：必填字段、重复 ID、可回答与页码的一致性 | 数据契约、校验 |
@@ -209,6 +223,9 @@ rag-agent-assistant/
 | tests/unit/test_cli_ingest.py | ingest、reindex、delete-document 的参数校验、退出码与成功、部分失败、缺密钥分支 |
 | tests/unit/test_retriever.py | 精确内容命中排第一、分数降序与排名、top-k 默认与覆盖、阈值高低分支、空索引、来源过滤、非法配置与调用参数 |
 | tests/unit/test_cli_search.py | search 的用法错误、命中输出、低置信度退出码 1、空索引与阈值越界 |
+| tests/unit/test_business_repository.py | 模拟数据幂等灌入、类型化查询、保修状态随参考日期变化、工单幂等键唯一约束、整数月加法边界 |
+| tests/unit/test_tools.py | 四个工具的契约、掩码字段、权限拒绝、确认要求、幂等重复调用、Schema 违规与存储故障可重试 |
+| tests/unit/test_cli_tool.py | tool list 契约输出、查询成功、权限失败退出码 1、未确认拒写、重复创建返回同一工单、参数错误退出码 2 |
 | tests/unit/test_rag_answer.py | 引用校验、编造编号被丢弃与上报、六类拒答原因、上下文预算、提示词与 Provider 异常传播 |
 | tests/unit/test_cli_answer.py | answer 的引用输出、拒答退出码、空索引不调用模型、`--stream` 先流后结果与缺密钥 |
 | tests/unit/test_qwen_stream.py | SSE 增量顺序、噪声与 `[DONE]` 忽略、状态码分类、首个增量后不重试、Fake 分片 |
@@ -246,6 +263,8 @@ rag-agent-assistant/
 阶段 7（RAG 回答与来源引用）已完成并通过验收，含真实带引用回答、真实 Token 流式输出，以及阶段 6 遗留问题的处置。
 
 阶段 8（RAG 评测基线）已完成并通过验收，含 49 条评测集、检索与回答两条基线，以及一次用数据驱动的提示词改进。
+
+阶段 9（业务工具与工具契约）已完成并通过验收，含模拟业务数据、四个契约化工具与真实命令行验证。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -389,6 +408,28 @@ rag-agent-assistant/
 - **运行间波动**：检索指标确定可重复；回答指标会波动（两次基线运行的 `unparseable` 分别为 4 与 5），因此回答模式的对比不能只看单次结果。
 - 可重复执行：`rag-agent evaluate --mode retrieval`（仅查询 Embedding）与 `rag-agent evaluate --mode answer`（每条约 2 个请求），报告写入 `data/eval/reports/`。
 
+阶段 9 证据（2026-09-11 实际执行）：
+
+- 代码提交：`4f366dd`。
+- `ruff check`：All checks passed；`mypy`（strict，files = ["src"]）：Success: no issues found in 43 source files。
+- `pytest`：307 passed, 2 skipped（在 DSH 沙箱内执行）；另有 19 个使用 `tmp_path` 的用例受沙箱限制，由学习者在本地确认，两处合计 326 passed, 2 skipped。
+- 模拟数据：`data/business/seed.json`（3 个用户、5 台设备、4 张订单，电话字段已掩码），随代码提交；文件中带有「模拟数据」声明。保修到期日由「激活日期 + 整数月」计算，需要判定时必须传入 `as_of` 日期，不使用随机值。
+- 真实命令行验证（`rag-agent tool`，离线执行）：
+
+  | 场景 | 结果 |
+  |---|---|
+  | `tool list` | 退出码 0，列出 4 个工具及其参数 Schema |
+  | 查询本人新设备 D2002 | 退出码 0，`warranty_active` 为 true，到期日 2028-01-10 |
+  | 查询本人旧设备 D2001 | 退出码 0，`warranty_active` 为 false（到期日 2026-03-15） |
+  | 查询他人设备 D2003 | 退出码 1，`permission_denied`，`retryable` 为 false |
+  | 创建工单但未确认 | 退出码 1，`confirmation_required`，数据库中没有写入 |
+  | 创建工单且已确认 | 退出码 0，`created` 为 true，工单号 `T15E4459A` |
+  | 重复同一请求 | 退出码 0，`created` 为 false，返回**同一个工单号** |
+  | 为他人设备创建工单 | 退出码 1，`permission_denied`，未写入 |
+
+- 契约要点：工具失败一律返回 `status="error"` 加稳定 `code` 与 `retryable`，**不会把错误伪装成正常字符串**；参数先经 Pydantic 校验再触达仓储；写工具在 `confirmed` 为 false 时拒绝执行，因此模型无法自行创建工单；幂等键可由调用方提供，否则由「用户 + 设备 + 故障 + 联系方式」派生，重复请求复用同一张工单。
+- 边界说明：本阶段的 `confirmed` 字段只是工具层契约，**真正的用户确认节点属于阶段 11 的 LangGraph Interrupt**；权限模型也只做“调用方必须是设备属主”一条，不含角色与权限表。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
@@ -432,23 +473,29 @@ rag-agent-assistant/
 - 49 条带预期页码与参考答案的离线评测集，覆盖安全、使用、保养、故障、参数、合规与范围外问题。
 - `rag-agent evaluate --mode retrieval|answer` 一条命令生成 Markdown 与 JSON 报告，并列出需要关注的用例。
 - 检索指标（Recall@K、MRR）与回答指标（回答率、引用正确率、拒答正确率、决策正确率、忠实度代理）分开度量。
+- 可预测的模拟业务数据（用户、设备、订单），带掩码联系方式与按整数月计算的保修状态。
+- 四个契约化业务工具：用户查询、设备查询、订单查询与工单创建，失败一律返回结构化错误码而不是字符串。
+- 工具层强制确认契约：未确认的写请求被拒绝，数据库不产生任何写入。
+- 工单创建幂等：重复请求返回同一张工单，并明确区分 `created` 为 true 或 false。
+- 单条权限规则：调用方必须是设备属主，越权返回 `permission_denied`。
+- `rag-agent tool list` 与 `rag-agent tool <名称> --args '{...}'`，可让每个工具脱离 Agent 独立调用与验证。
 
 ## 尚未实现
 
-- 用户、设备、订单和工单工具。
-- LangGraph 路由、Checkpoint 和人工确认。
+- LangGraph 路由、Checkpoint 和人工确认（工具层的确认契约已就位）。
 - Streamlit 界面、安全降级和 Docker 交付。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
 - 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
 - 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
 - 表格序号与上下文编号混淆导致的引用越界（6 条），需要更强的格式约束或校验提示。
+- 角色与权限表：当前只有“属主”一条规则，模拟定位下够用但不足以表达更细的授权。
 
 ## 最近结构变化
 
-本次同步（阶段 8）相对上一次的主要变化：
+本次同步（阶段 9）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/evaluation/`，承载评测集、指标、执行器与报告。
-- 新增 `data/eval/qa_set.jsonl` 与 `data/eval/reports/`，并首次把评测内容纳入版本库。
-- `src/rag_agent/__main__.py` 新增 `evaluate` 命令与 `--mode`、`--dataset`、`--out`、`--limit`。
-- `src/rag_agent/generation/rag_answer.py` 的提示词明确 citations 为整数数组并说明编号含义。
-- `tests/unit/` 新增四个测试文件。
+- 新增 `src/rag_agent/storage/business.py`，承载模拟业务表与仓储。
+- 新增 `src/rag_agent/tools/`，承载工具契约、错误分类与四个工具实现。
+- 新增 `data/business/seed.json`，模拟业务数据随代码提交。
+- `src/rag_agent/__main__.py` 新增 `tool` 命令与 `--args`。
+- `tests/unit/` 新增三个测试文件。
