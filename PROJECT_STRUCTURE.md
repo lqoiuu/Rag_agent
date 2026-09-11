@@ -41,6 +41,12 @@ rag-agent-assistant/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── health.py
+│       ├── agent/
+│       │   ├── __init__.py
+│       │   ├── graph.py
+│       │   ├── intent.py
+│       │   ├── nodes.py
+│       │   └── state.py
 │       ├── config/
 │       │   ├── __init__.py
 │       │   ├── providers.py
@@ -96,12 +102,16 @@ rag-agent-assistant/
     ├── integration/
     │   └── test_qwen_live.py
     └── unit/
+        ├── agent_test_support.py
         ├── ingestion_test_support.py
         ├── model_test_support.py
         ├── pdf_fixtures.py
+        ├── test_agent_graph.py
+        ├── test_agent_intent.py
         ├── test_business_repository.py
         ├── test_chroma_store.py
         ├── test_chunk_stats.py
+        ├── test_cli_agent.py
         ├── test_cli_answer.py
         ├── test_cli_ask.py
         ├── test_cli_chunk_report.py
@@ -150,8 +160,13 @@ rag-agent-assistant/
 | 文件 | 职责 | 涉及知识 |
 |---|---|---|
 | src/rag_agent/__init__.py | 声明 rag_agent Python 包并提供版本号 | 包、模块、包元数据 |
-| src/rag_agent/__main__.py | 提供 `health`、`ask`、`answer`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document` 八个命令，退出码 0 成功、1 部分失败或拒答、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
+| src/rag_agent/__main__.py | 提供 `health`、`ask`、`answer`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document`、`evaluate`、`tool`、`agent` 十一个命令，退出码 0 成功、1 部分失败或需用户动作、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
 | src/rag_agent/health.py | 集中检查 Python、虚拟环境、依赖和核心模块导入 | 运行环境、依赖元数据、模块导入 |
+| src/rag_agent/agent/__init__.py | 对外暴露状态、意图、节点、图与运行结果 | 模块边界 |
+| src/rag_agent/agent/state.py | AgentState：输入、意图、澄清轮次、知识与工具结果、工单流程、状态与节点轨迹，列表字段带 reducer | State 设计、Reducer、状态可观测性 |
+| src/rag_agent/agent/intent.py | 模型辅助的意图识别，解析失败或置信度过低一律回退 unknown | 结构化输出、确定性回退 |
+| src/rag_agent/agent/nodes.py | 八个节点：意图识别、知识问答、设备查询、工单信息收集、待确认、创建工单、澄清、失败 | Node 职责单一、写操作双重屏障 |
+| src/rag_agent/agent/graph.py | 条件边路由、澄清计数与 recursion_limit 守卫、AgentRun 结果视图 | Edge、条件边、循环限制 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
 | src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时、重试和检索参数 | Pydantic、环境配置、路径稳定性 |
 | src/rag_agent/config/providers.py | 依据 Settings 组装通义千问聊天与 Embedding 实例，缺密钥时在发请求前失败 | 依赖注入、组装与配置边界 |
@@ -223,6 +238,10 @@ rag-agent-assistant/
 | tests/unit/test_cli_ingest.py | ingest、reindex、delete-document 的参数校验、退出码与成功、部分失败、缺密钥分支 |
 | tests/unit/test_retriever.py | 精确内容命中排第一、分数降序与排名、top-k 默认与覆盖、阈值高低分支、空索引、来源过滤、非法配置与调用参数 |
 | tests/unit/test_cli_search.py | search 的用法错误、命中输出、低置信度退出码 1、空索引与阈值越界 |
+| tests/unit/agent_test_support.py | Agent 测试辅助：脚本化意图/回答/字段提取回复，以及内存向量库与模拟业务仓储 |
+| tests/unit/test_agent_intent.py | 意图标签识别、非法 JSON、未知标签、低置信度降级、阈值可配、非数值置信度 |
+| tests/unit/test_agent_graph.py | 四类意图各走对路径、澄清分支、权限失败、待确认不写库、确认后写一次、澄清上限、**结构上不存在收集直达创建的边** |
+| tests/unit/test_cli_agent.py | agent 命令的轨迹输出、设备查询、待确认退出码 1、`--confirm` 创建、缺密钥 |
 | tests/unit/test_business_repository.py | 模拟数据幂等灌入、类型化查询、保修状态随参考日期变化、工单幂等键唯一约束、整数月加法边界 |
 | tests/unit/test_tools.py | 四个工具的契约、掩码字段、权限拒绝、确认要求、幂等重复调用、Schema 违规与存储故障可重试 |
 | tests/unit/test_cli_tool.py | tool list 契约输出、查询成功、权限失败退出码 1、未确认拒写、重复创建返回同一工单、参数错误退出码 2 |
@@ -265,6 +284,8 @@ rag-agent-assistant/
 阶段 8（RAG 评测基线）已完成并通过验收，含 49 条评测集、检索与回答两条基线，以及一次用数据驱动的提示词改进。
 
 阶段 9（业务工具与工具契约）已完成并通过验收，含模拟业务数据、四个契约化工具与真实命令行验证。
+
+阶段 10（LangGraph 状态与确定性工作流）已完成并通过验收，含四类意图的真实路由验证与「模型无法跳过确认节点」的结构性证明。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -430,6 +451,25 @@ rag-agent-assistant/
 - 契约要点：工具失败一律返回 `status="error"` 加稳定 `code` 与 `retryable`，**不会把错误伪装成正常字符串**；参数先经 Pydantic 校验再触达仓储；写工具在 `confirmed` 为 false 时拒绝执行，因此模型无法自行创建工单；幂等键可由调用方提供，否则由「用户 + 设备 + 故障 + 联系方式」派生，重复请求复用同一张工单。
 - 边界说明：本阶段的 `confirmed` 字段只是工具层契约，**真正的用户确认节点属于阶段 11 的 LangGraph Interrupt**；权限模型也只做“调用方必须是设备属主”一条，不含角色与权限表。
 
+阶段 10 证据（2026-09-11 实际执行）：
+
+- 代码提交：`c685b7e`。
+- `ruff check`：All checks passed；`mypy`（strict，files = ["src"]）：Success: no issues found in 48 source files。
+- `pytest`：342 passed, 2 skipped（在 DSH 沙箱内执行）；另有 19 个使用 `tmp_path` 的用例受沙箱限制，由学习者在本地确认，两处合计 361 passed, 2 skipped。
+- 真实图执行验证（`rag-agent agent`，真实模型）：
+
+  | 场景 | 退出码 | 结果 | 节点轨迹 |
+  |---|---|---|---|
+  | 知识问答「制造商地址在哪里」 | 0 | `answered`，intent 由模型判定为 knowledge，置信度 0.95，引用 1 条 | `classify:knowledge` → `knowledge:answered:citations=1` |
+  | 设备查询「我的机器还在保修吗」 | 0 | `answered`，intent 为 device，调用 `device.lookup` 与 `order.lookup` | `classify:device` → `device:ok` |
+  | 工单请求（未确认） | 1 | `pending_confirmation`，`confirmed` 为 false，`created_ticket` 为 null，**数据表工单数不变** | `classify:ticket` → `ticket_collect:complete` → `ticket_pending:awaiting_confirmation` |
+  | 同一请求加 `--confirm` | 0 | `ticket_created`，工单号 `T9AEBF945`，工单数由 1 增至 2 | 在上述轨迹后追加 `ticket_create:created=True` |
+
+- **验收条件的结构性证明**：测试直接读取编译后图的边集合，断言**不存在** `ticket_collect → ticket_create`、`classify → ticket_create`、`clarify → ticket_create` 三条边，唯一进入创建节点的边来自待确认节点。行为测试与此互补：未确认的运行中轨迹**根本没有 `ticket_create`**。
+- 两道独立屏障：图上的边限制，以及工具契约里的 `confirmed` 校验。任一道都能单独阻止未确认写入，测试分别覆盖。
+- 确定性与模型边界：模型只做两件事——判断意图、从用户消息中读取字段；路由、业务顺序、澄清上限与写操作门禁全部由图和代码决定。意图输出非法或置信度低于 0.5 时一律降级为 `unknown` 并走澄清分支。
+- 循环限制：状态里带澄清轮次计数（默认 3 轮，超出返回 `clarification_limit` 并转人工），图调用同时设置 `recursion_limit=12`。**本阶段图中刻意没有环**：没有 Checkpointer 时单次运行收不到新的用户输入，因此澄清分支是「返回给调用方」而不是「原地重试」；阶段 11 会用 Interrupt 把它换成真正的暂停与恢复。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
@@ -479,10 +519,15 @@ rag-agent-assistant/
 - 工单创建幂等：重复请求返回同一张工单，并明确区分 `created` 为 true 或 false。
 - 单条权限规则：调用方必须是设备属主，越权返回 `permission_denied`。
 - `rag-agent tool list` 与 `rag-agent tool <名称> --args '{...}'`，可让每个工具脱离 Agent 独立调用与验证。
+- LangGraph 工作流：意图路由、知识问答、设备查询、工单收集四条确定性路径，节点轨迹可回放。
+- 模型边界清晰：模型只判断意图与读取字段，非法或低置信度输出一律降级为 `unknown` 并转澄清。
+- 写操作门禁：图上的边不允许从收集节点直达创建节点，工具层再次校验确认标记。
+- 澄清轮次上限与 `recursion_limit` 双守卫，超出即转人工而不是无限追问。
+- `rag-agent agent "问题" --user-id U1001` 单轮跑图，输出状态、意图、引用、工具结果、待确认动作与节点轨迹。
 
 ## 尚未实现
 
-- LangGraph 路由、Checkpoint 和人工确认（工具层的确认契约已就位）。
+- 多轮会话、Checkpoint 与真正的人工确认暂停恢复（阶段 11；工具层与工具链的确认契约已就位）。
 - Streamlit 界面、安全降级和 Docker 交付。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
 - 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
@@ -492,10 +537,9 @@ rag-agent-assistant/
 
 ## 最近结构变化
 
-本次同步（阶段 9）相对上一次的主要变化：
+本次同步（阶段 10）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/storage/business.py`，承载模拟业务表与仓储。
-- 新增 `src/rag_agent/tools/`，承载工具契约、错误分类与四个工具实现。
-- 新增 `data/business/seed.json`，模拟业务数据随代码提交。
-- `src/rag_agent/__main__.py` 新增 `tool` 命令与 `--args`。
-- `tests/unit/` 新增三个测试文件。
+- 新增 `src/rag_agent/agent/`，承载状态、意图识别、节点与图。
+- `src/rag_agent/generation/rag_answer.py` 抽出公共的 `extract_json_object`，供意图识别复用。
+- `src/rag_agent/__main__.py` 新增 `agent` 命令与 `--user-id`、`--device-id`、`--contact`、`--confirm`。
+- `tests/unit/` 新增四个测试文件与一个 Agent 测试辅助模块。
