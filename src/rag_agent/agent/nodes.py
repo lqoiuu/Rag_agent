@@ -9,12 +9,13 @@ the confirmation step before a write — out of reach of the model.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 from langgraph.types import interrupt
 
-from rag_agent.agent.intent import classify_intent
+from rag_agent.agent.devices import resolve_device_id
+from rag_agent.agent.intent import Intent, classify_intent
+from rag_agent.agent.routing import prefer_device
 from rag_agent.agent.state import (
     STATUS_ANSWERED,
     STATUS_ERROR,
@@ -36,12 +37,6 @@ from rag_agent.tools.models import CreateTicketArgs, DeviceLookupArgs, OrderLook
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_CLARIFICATIONS = 3
-
-#: Matches a device label such as ``D2002`` in a user message or in the recent
-#: conversation. Deliberately strict: an uppercase ``D`` followed by digits only.
-#: The simulated ids are ``D2001`` to ``D2005``, and no model name in the knowledge
-#: base has this shape, so a false positive would have to be invented by the user.
-DEVICE_ID_PATTERN = re.compile(r"\bD\d{3,}\b")
 
 TICKET_EXTRACT_SYSTEM_PROMPT = (
     "从用户消息和已知信息中提取报修工单需要的字段。\n"
@@ -75,19 +70,36 @@ class AgentNodes:
     max_clarifications: int = DEFAULT_MAX_CLARIFICATIONS
 
     def classify(self, state: AgentState) -> dict[str, object]:
-        """Decide the task type; unusable answers fall back to ``unknown``."""
+        """Decide the task type; unusable answers fall back to ``unknown``.
 
+        A classification that would break an obviously resolvable follow-up is
+        corrected here, by code rather than by another model call: when the model
+        does not choose ``device`` but the conversation already fixes which device
+        is being discussed and the message is a bare referential follow-up, the
+        intent is moved to ``device``. The correction is visible in the trace so it
+        can never be mistaken for the model's own decision.
+        """
+
+        question = state.get("question", "")
         decision = classify_intent(
-            state.get("question", ""),
+            question,
             chat_model=self.chat_model,
             context=state.get("prompt_context", ""),
         )
+        intent = str(decision.intent)
+        trace = [f"classify:{intent}"]
+
+        device_id = resolve_device_id(state)
+        if prefer_device(question, device_id, intent):
+            trace[0] = f"classify:device:rerouted-from-{intent}"
+            intent = str(Intent.DEVICE)
+
         return {
-            "intent": str(decision.intent),
+            "intent": intent,
             "intent_confidence": decision.confidence,
             "intent_source": decision.source,
             "intent_reason": decision.reason,
-            "trace": [f"classify:{decision.intent}"],
+            "trace": trace,
         }
 
     def knowledge(self, state: AgentState) -> dict[str, object]:
@@ -337,35 +349,6 @@ def _is_confirmed(decision: object) -> bool:
     if isinstance(decision, dict):
         return decision.get("confirmed") is True
     return False
-
-
-def resolve_device_id(state: AgentState) -> str | None:
-    """Find the device this turn is about, without asking the model.
-
-    The value comes from the caller first, then from the text: the current message
-    is the strongest signal, and the conversation window is what makes a follow-up
-    such as "那它的保修期是多久" resolvable at all.
-
-    This is deliberately a *deterministic* extraction instead of another model call.
-    Before it existed, the device id could only arrive through the ``--device-id``
-    flag, so asking "D2002 还在保修吗" in a message listed every device instead of
-    answering about D2002 — and once a previous turn was rendered into the prompt,
-    the same follow-up was classified as a knowledge question often enough to turn
-    the whole flow into a refusal.
-
-    Ownership is *not* checked here. The extracted id is handed to the tool exactly
-    like a caller-supplied one, so a device belonging to somebody else still fails
-    with ``permission_denied`` instead of being silently skipped.
-    """
-
-    supplied = (state.get("device_id") or "").strip()
-    if supplied:
-        return supplied
-    for text in (state.get("question", ""), state.get("prompt_context", "")):
-        match = DEVICE_ID_PATTERN.search(text or "")
-        if match:
-            return match.group(0).upper()
-    return None
 
 
 def _as_text(value: object) -> str | None:

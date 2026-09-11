@@ -214,6 +214,31 @@ def test_follow_up_keeps_working_once_history_is_in_the_prompt(conversations: An
     assert device["device_id"] == "D2002"
 
 
+def test_the_corrected_intent_is_visible_in_the_trace(conversations: Any) -> None:
+    """A corrected classification must never look like the model's own decision."""
+
+    graph, _model, _repository = conversations(
+        intent_reply("device"),
+        intent_reply("knowledge"),  # 模型在有历史的线程里把它判成了知识问题
+    )
+    first = chat_turn(graph, "D2002 还在保修吗", thread_id="T1", user_id="U1001")
+    graph.update_state(
+        {"configurable": {"thread_id": "T1"}},
+        {
+            "messages": [
+                {"role": "user", "content": "D2002 还在保修吗"},
+                {"role": "assistant", "content": first.run.answer},
+            ]
+        },
+    )
+
+    second = chat_turn(graph, "那它的保修期是多久", thread_id="T1", user_id="U1001")
+
+    assert second.run.intent == "device"
+    assert "classify:device:rerouted-from-knowledge" in second.run.trace
+    assert second.run.status == STATUS_ANSWERED
+
+
 def test_preferences_reach_the_prompt(conversations: Any) -> None:
     graph, model, _repository = conversations(
         intent_reply("knowledge"), answer_reply(MANUAL_PAGE_27)
