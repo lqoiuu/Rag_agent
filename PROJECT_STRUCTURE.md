@@ -43,9 +43,11 @@ rag-agent-assistant/
 │       ├── health.py
 │       ├── agent/
 │       │   ├── __init__.py
+│       │   ├── devices.py
 │       │   ├── graph.py
 │       │   ├── intent.py
 │       │   ├── nodes.py
+│       │   ├── routing.py
 │       │   └── state.py
 │       ├── config/
 │       │   ├── __init__.py
@@ -116,6 +118,7 @@ rag-agent-assistant/
         ├── test_agent_graph.py
         ├── test_agent_intent.py
         ├── test_agent_memory.py
+        ├── test_agent_routing.py
         ├── test_business_repository.py
         ├── test_chroma_store.py
         ├── test_chunk_stats.py
@@ -177,6 +180,8 @@ rag-agent-assistant/
 | src/rag_agent/agent/state.py | AgentState：输入、多轮上下文字段、意图、澄清轮次、知识与工具结果、工单流程、状态与节点轨迹，列表字段带 reducer | State 设计、Reducer、状态可观测性 |
 | src/rag_agent/agent/intent.py | 模型辅助的意图识别，可接收最近对话作为上下文；解析失败或置信度过低一律回退 unknown | 结构化输出、确定性回退 |
 | src/rag_agent/agent/nodes.py | 八个节点：意图识别、知识问答、设备查询、工单信息收集、待确认、创建工单、澄清、失败；创建节点以 `interrupt()` 作为第一条语句，暂停早于任何工具调用 | Node 职责单一、写操作双重屏障 |
+| src/rag_agent/agent/devices.py | 设备号正则与解析顺序（调用方参数 → 当前消息 → 对话窗口）的唯一一份定义，供设备节点与路由规则共用 | 确定性抽取、规则单一来源 |
+| src/rag_agent/agent/routing.py | 在模型判定之后应用的确定性改判规则：`prefer_device` 与两张词表，纯函数、只向 device 收敛 | 确定性路由、模型判断与代码判断的边界 |
 | src/rag_agent/agent/graph.py | 条件边路由、澄清计数与 recursion_limit 守卫、Checkpointer 挂载、`Command(resume=...)` 恢复入口、AgentRun 与 ChatTurn 结果视图 | Edge、条件边、Interrupt、循环限制 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
 | src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时、重试和检索参数 | Pydantic、环境配置、路径稳定性 |
@@ -257,7 +262,8 @@ rag-agent-assistant/
 | tests/unit/memory_test_support.py | 会话记忆测试辅助：每次生成一个独立的共享缓存内存库名，使第二个连接仍能读到第一个连接写入的状态 |
 | tests/unit/test_agent_intent.py | 意图标签识别、非法 JSON、未知标签、低置信度降级、阈值可配、非数值置信度 |
 | tests/unit/test_agent_graph.py | 四类意图各走对路径、澄清分支、权限失败、待确认不写库、暂停后确认只写一次、澄清上限、**结构上不存在收集直达创建的边** |
-| tests/unit/test_agent_memory.py | 第二轮读到第一轮消息、窗口裁剪而库中保留全量、线程之间不共享上下文、取消确认不写库、重复恢复不会二次写入、偏好进入 Prompt |
+| tests/unit/test_agent_memory.py | 第二轮读到第一轮消息、窗口裁剪而库中保留全量、线程之间不共享上下文、取消确认不写库、重复恢复不会二次写入、偏好进入 Prompt、从消息解析设备号、有历史时追问仍可用且轨迹留改判记录 |
+| tests/unit/test_agent_routing.py | 改判规则的边界：指代式追问命中；模型已判 device、`ticket`、无指代、无设备号、含产品知识话题词五种情况都必须**不改判** |
 | tests/unit/test_memory_checkpoints.py | 关闭后重新打开仍能读到会话、线程隔离、父链回溯与最新在前、按 checkpoint_id 精确取回、删除线程清理三张表、同一检查点重复写入幂等、limit 与 before 过滤 |
 | tests/unit/test_conversation_memory.py | 窗口保留最新消息且丢弃非法记录、空上下文渲染为空串、上下文字块标注为「不作为事实依据」、会话归属校验、未绑定会话可被认领一次、偏好按用户隔离且不随会话清除、**登记表与检查点解析同一个数据库目标** |
 | tests/unit/test_cli_chat.py | chat 生成或复用 thread、两次独立调用共享同一会话、跨用户被拒、待确认不写库、--cancel 不写库、--confirm 建单、thread list/clear/preferences、参数互斥与缺密钥 |
@@ -622,6 +628,13 @@ rag-agent-assistant/
 - `tests/conftest.py`：覆盖内置 `tmp_path`，把临时目录放到项目内 `.pytest_tmp/`，使沙箱内也能正常跑完全部用例。
 - `tests/unit/` 新增四个测试文件与一个测试辅助模块（`memory_test_support.py`）。
 - `docs/adr/0003-conversation-memory.md`：记录 Checkpointer 实现方式、Interrupt 位置与记忆边界的决策。
+
+本次同步的第二轮（同一阶段的修复提交，`f5238f3`、`5799bff`、`95ef056`）：
+
+- 新增 `src/rag_agent/agent/devices.py`（设备号解析的唯一来源）与 `src/rag_agent/agent/routing.py`（模型判定之后的确定性改判规则）。
+- 新增 `tests/unit/test_agent_routing.py`，`test_agent_memory.py` 增加设备解析与改判留痕用例。
+- `src/rag_agent/agent/nodes.py`：`classify` 应用改判并在轨迹留痕 `classify:device:rerouted-from-*`；`device` 节点改用共享的设备号解析。
+- `src/rag_agent/agent/__init__.py`：对外暴露 `prefer_device` 与 `resolve_device_id`。
 
 上一次同步（阶段 10）的主要变化：
 

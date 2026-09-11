@@ -1,5 +1,6 @@
 """LangGraph workflow: state, routing and grounded answers."""
 
+from rag_agent.agent.devices import resolve_device_id
 from rag_agent.agent.graph import (
     DEFAULT_RECURSION_LIMIT,
     DEFAULT_WINDOW_SIZE,
@@ -25,6 +26,7 @@ from rag_agent.agent.intent import (
     classify_intent,
 )
 from rag_agent.agent.nodes import DEFAULT_MAX_CLARIFICATIONS, AgentNodes
+from rag_agent.agent.routing import prefer_device
 from rag_agent.agent.state import (
     STATUS_ANSWERED,
     STATUS_ERROR,
@@ -66,5 +68,7 @@ __all__ = [
     "build_initial_state",
     "chat_turn",
     "classify_intent",
+    "prefer_device",
+    "resolve_device_id",
     "run_agent",
 ]
