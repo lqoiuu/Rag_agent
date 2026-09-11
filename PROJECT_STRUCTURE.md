@@ -525,7 +525,7 @@ rag-agent-assistant/
 - 代码提交：`3f9fe05`（22 个文件，+2500 / −97）、`f5238f3`（URI 目标解析修复）、`5799bff`（设备号确定性抽取）、`95ef056`（追问改判规则）；提交时受控文件 123 个。
 - `ruff check`：All checks passed；`ruff format --check`：113 files already formatted。
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 54 source files。
-- `pytest`：**449 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- `pytest`：**454 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed；阶段 11 完成时为 407，后续阶段 12 与修复提交继续增加）。
 - 真实模型端到端验收（离线脚本连续调用 CLI，真实 32 页说明书 34 个分片的索引）：
 
   | 场景 | 退出码 | 关键结果 |
@@ -570,7 +570,7 @@ rag-agent-assistant/
 - 依赖：新增 `streamlit 1.63.0`（`uv add streamlit`），其依赖 pandas 3.0.5、pyarrow 25.0.1 在 Python 3.13 下均有官方 cp313 wheel。
 - `ruff check`：All checks passed；`ruff format --check`：122 files already formatted。
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 61 source files。
-- `pytest`：**440 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- `pytest`：**454 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed；阶段 12 完成时为 440，之后的修复提交继续增加）。
 - 真实服务启动：`python -m streamlit run src/rag_agent/ui/app.py --server.port=8555`，`GET /` 返回 **HTTP 200**，`GET /_stcore/health` 返回 **200 ok**。
 - 三页渲染验证：用 Streamlit 官方 `st.testing.v1.AppTest` 逐页执行（入口 + `switch_page` 到三个页面），四者 `at.exception` 均为空。
 - 界面内行为验证（注入假模型，不联网络）：
@@ -590,6 +590,15 @@ rag-agent-assistant/
 1. **`MetadataStore` 与 `BusinessRepository` 同样缺少跨线程许可**：`AppTest` 每个页面在不同线程执行，立刻复现 `SQLite objects created in a thread can only be used in that same thread`。两者现与 Checkpointer 一致：`check_same_thread=False` + 可重入锁串行化事务，文件库启用 WAL，使同库的另外两个连接可以在写入期间读取。
 2. **检索页在只有一个命中时崩溃**：此时 `margin` 为 `None`，而页面用 `f"{margin:.4f}"` 格式化，抛 `TypeError`。现显示为「不适用（只有一个命中）」。
 3. **侧边栏把会话编号同时用作 `session_state` 键与 `text_input` 的 key**：点击「新建会话」时赋值触发 `StreamlitWidgetAlreadyInstantiatedError`。现改为输入框使用独立键，并通过 `on_change` 回调同步，符合 Streamlit 对「渲染后不得改写控件键」的要求。
+
+阶段 12 补充证据（流式路径的交接修复，提交 `4e231a2`）：
+
+- 现象（由学习者在运行中的界面发现）：打开「流式生成」后问 `D2002 还在保修吗`，得到「所有提供的资料均未出现型号 D2002」的**拒答**；关闭开关后正常答出设备信息。两次唯一的差别是**由哪条路径处理**，而拒答把「模式限制」说成了「资料里没有」。
+- 根因：流式路径只走知识问答，它不跑意图分类，因此无法调用设备工具或工单流程。这个限制本身要保留（它让「真流式」与「引用校验」能同时成立），但必须**可见且可恢复**。
+- 修法：`stream_chat_turn` 新增 `delegate_to_agent`；判定为非知识类时返回 `intent_source="delegated"` 的空回答（保留 `intent` 便于调用方转交），界面记录原因并在同轮改用完整智能体回答，提示在下一趟渲染显示（因此刷新后仍在）。
+- 失败过一次的做法：把提示画在**同一趟**渲染里（紧接 `st.rerun()`），它不会进入渲染树——这是 `AppTest` 断言抓出来的，改为写入会话状态后正常。
+- 该限制的判据由 `routing.prefer_knowledge_for_stream` 单点定义：`knowledge`/`unknown` 自己答，`device`/`ticket` 一律转交；无法分类的问题仍会尝试作答（真没资料会被引用校验拒掉）。
+- 质量门：`pytest` **454 passed, 2 skipped**。
 
 已知环境注意事项：
 
