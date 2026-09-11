@@ -496,7 +496,7 @@ rag-agent-assistant/
 阶段 11 证据（2026-09-11 实际执行）：
 
 - 代码提交：`3f9fe05`（22 个文件，+2500 / −97）、`f5238f3`（URI 目标解析修复）、`5799bff`（设备号确定性抽取）；提交时受控文件 120 个。
-- `ruff check`：All checks passed；`ruff format --check`：111 files already formatted。
+- `ruff check`：All checks passed；`ruff format --check`：110 files already formatted。
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 52 source files。
 - `pytest`：**407 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
 - 真实模型端到端验收（离线脚本连续调用 CLI，真实 32 页说明书 34 个分片的索引）：
