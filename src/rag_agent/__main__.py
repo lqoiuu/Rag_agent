@@ -8,10 +8,19 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from rag_agent.config import build_chat_model, build_embedding_model, get_settings
 from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
+from rag_agent.evaluation import (
+    EvaluationDatasetError,
+    load_cases,
+    run_answer_evaluation,
+    run_retrieval_evaluation,
+    to_json,
+    to_markdown,
+)
 from rag_agent.generation import (
     RagAnswer,
     answer_question,
@@ -59,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
             "ingest",
             "reindex",
             "delete-document",
+            "evaluate",
         ),
         help="Command to execute.",
     )
@@ -110,6 +120,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-index-chunks",
         action="store_true",
         help="Keep table-of-contents style chunks when indexing instead of dropping them.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("retrieval", "answer"),
+        default="retrieval",
+        help="Evaluation mode: retrieval only, or retrieval plus grounded answering.",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="",
+        help="Path to the evaluation set; defaults to data/eval/qa_set.jsonl.",
+    )
+    parser.add_argument(
+        "--out",
+        default="",
+        help="Directory for the generated reports; defaults to data/eval/reports.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Evaluate only the first N cases, for a quick check.",
     )
     return parser
 
@@ -449,6 +481,120 @@ def _delete_document(source: str) -> int:
     return _report_results({"target": source}, (result,))
 
 
+def _evaluate(
+    *,
+    mode: str,
+    dataset: str,
+    out: str,
+    limit: int | None,
+    top_k: int | None,
+    threshold: float | None,
+    source: str,
+) -> int:
+    """Run the offline evaluation and write reproducible reports."""
+
+    settings = get_settings()
+    dataset_path = Path(dataset) if dataset else settings.data_dir / "eval" / "qa_set.jsonl"
+    out_dir = Path(out) if out else settings.data_dir / "eval" / "reports"
+
+    try:
+        cases = load_cases(dataset_path)
+        if limit is not None:
+            cases = cases[:limit]
+        if not cases:
+            raise EvaluationDatasetError("no cases selected for evaluation")
+    except EvaluationDatasetError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+
+    conditions: dict[str, object] = {
+        "dataset": str(dataset_path),
+        "case_count": len(cases),
+        "top_k": top_k if top_k is not None else settings.retrieval_top_k,
+        "threshold": threshold if threshold is not None else settings.retrieval_threshold,
+        "source_filter": source or "—",
+        "embedding_model": settings.qwen_embedding_model,
+        "chunking": {
+            "chunk_size": DEFAULT_CHUNK_SIZE,
+            "chunk_overlap": DEFAULT_CHUNK_OVERLAP,
+        },
+        "index_like_filter": True,
+        "vector_count": ChunkVectorStore(settings.chroma_dir).count(),
+    }
+
+    try:
+        if mode == "answer":
+            conditions["chat_model"] = settings.qwen_chat_model
+            with _open_answering(settings) as (vectors, embedding_model, chat_model):
+                retriever = Retriever(
+                    vectors=vectors,
+                    embedding_model=embedding_model,
+                    config=RetrieverConfig(
+                        top_k=settings.retrieval_top_k,
+                        threshold=settings.retrieval_threshold,
+                    ),
+                )
+                report = run_answer_evaluation(
+                    cases,
+                    retriever=retriever,
+                    chat_model=chat_model,
+                    top_k=top_k,
+                    threshold=threshold,
+                    conditions=conditions,
+                )
+        else:
+            with _open_retrieval(settings) as (vectors, embedding_model):
+                retriever = Retriever(
+                    vectors=vectors,
+                    embedding_model=embedding_model,
+                    config=RetrieverConfig(
+                        top_k=settings.retrieval_top_k,
+                        threshold=settings.retrieval_threshold,
+                    ),
+                )
+                report = run_retrieval_evaluation(
+                    cases,
+                    retriever=retriever,
+                    top_k=top_k,
+                    threshold=threshold,
+                    conditions=conditions,
+                )
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    markdown_path, json_path = _write_reports(report, out_dir)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "mode": report.mode,
+                "report_markdown": str(markdown_path),
+                "report_json": str(json_path),
+                "summary": report.summary.as_dict(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return EXIT_OK
+
+
+def _write_reports(report: Any, out_dir: Path) -> tuple[Path, Path]:
+    """Write the Markdown and JSON reports, returning their paths."""
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    markdown_path = out_dir / f"{report.mode}-{stamp}.md"
+    json_path = out_dir / f"{report.mode}-{stamp}.json"
+    markdown_path.write_text(to_markdown(report), encoding="utf-8")
+    json_path.write_text(to_json(report), encoding="utf-8")
+    return markdown_path, json_path
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -508,6 +654,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not source:
             parser.error("delete-document requires the stored source label")
         return _delete_document(source)
+
+    if args.command == "evaluate":
+        if args.limit is not None and args.limit <= 0:
+            parser.error("--limit must be positive")
+        return _evaluate(
+            mode=args.mode,
+            dataset=args.dataset,
+            out=args.out,
+            limit=args.limit,
+            top_k=args.top_k,
+            threshold=args.threshold,
+            source=args.source,
+        )
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

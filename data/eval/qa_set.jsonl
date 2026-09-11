@@ -1,0 +1,49 @@
+{"id": "q01", "question": "能否在潮湿或有积水的地面上使用扫地机器人？", "category": "安全规范", "answerable": true, "expected_pages": [2], "reference_answer": "不可以，禁止在潮湿或有积水的地面上使用产品。"}
+{"id": "q02", "question": "产品使用环境温度有什么限制？", "category": "安全规范", "answerable": true, "expected_pages": [2], "reference_answer": "禁止在高于 40℃ 或低于 0℃ 的环境中使用产品。"}
+{"id": "q03", "question": "儿童可以使用这台扫地机器人吗？", "category": "安全规范", "answerable": true, "expected_pages": [2], "reference_answer": "产品不能由 8 岁以下儿童或精神上有障碍的人使用，若需要必须在监护人监督指导下进行。"}
+{"id": "q04", "question": "使用产品前需要先做什么？", "category": "产品使用", "answerable": true, "expected_pages": [1, 2, 8], "reference_answer": "仔细阅读说明书并妥善保存，先移除主机和全能基站上的所有防护物，并确保尘盒与过滤材料安装到位。"}
+{"id": "q05", "question": "产品可以自己更换电池吗？", "category": "安全规范", "answerable": true, "expected_pages": [2], "reference_answer": "禁止用户私自更换电池，怀疑电池损坏时应联系制造商、授权经销商或类似部门的专业人员更换。"}
+{"id": "q06", "question": "废弃产品前应该如何处理电池？", "category": "售后与合规", "answerable": true, "expected_pages": [2, 3], "reference_answer": "先把产品从充电座取下、关闭电源并取出电池，电池应交由专业回收点集中处置，不能随生活垃圾丢弃。"}
+{"id": "q07", "question": "如何下载 ECOVACS HOME App？", "category": "产品使用", "answerable": true, "expected_pages": [9], "reference_answer": "打开扫一扫扫描机身二维码按提示下载，或在手机应用商店搜索 ECOVACS HOME 下载安装。"}
+{"id": "q08", "question": "配网时对 Wi-Fi 网络有什么要求？", "category": "产品使用", "answerable": true, "expected_pages": [9], "reference_answer": "使用 2.4GHz 或 2.4/5GHz 混合网络，路由器需支持 802.11b/g/n 与 IPv4，不要使用 VPN、代理服务器或隐藏网络。"}
+{"id": "q09", "question": "全能基站应该怎么摆放？", "category": "产品使用", "answerable": true, "expected_pages": [10], "reference_answer": "靠墙放置在平坦地面，左右 0.5 米和前方 1.5 米范围内不要放物品，避免阳光直射，建议放在硬质地面上。"}
+{"id": "q10", "question": "清水箱里加清洁剂的比例是多少？", "category": "产品使用", "answerable": true, "expected_pages": [11], "reference_answer": "加水至 MAX 水位线，按压泵头约 10 下（15-20ml），推荐按约 1:200 的比例稀释。"}
+{"id": "q11", "question": "主机关机状态下可以充电吗？", "category": "产品使用", "answerable": true, "expected_pages": [11, 22], "reference_answer": "不可以，主机无法在电源关闭的状态下充电。"}
+{"id": "q12", "question": "首次清扫建图时主机卡在家具低矮处怎么办？", "category": "产品使用", "answerable": true, "expected_pages": [12], "reference_answer": "可以垫高家具、遮挡家具底部不让主机进入，或在 App 中设置虚拟墙禁止主机进入。"}
+{"id": "q13", "question": "可以在有流苏边的地毯上使用拖地功能吗？", "category": "产品使用", "answerable": true, "expected_pages": [8, 13], "reference_answer": "不可以，请勿在地毯上使用拖地功能，并建议提前把地毯流苏边缘卷入地毯下边。"}
+{"id": "q14", "question": "如何启用或解除童锁？", "category": "产品使用", "answerable": true, "expected_pages": [14], "reference_answer": "使用全能基站面板上的童锁按键启用，重复相同操作解除；启用后全能基站按键和主机启动键会被锁定。"}
+{"id": "q15", "question": "主机怎么返回全能基站充电？", "category": "产品使用", "answerable": true, "expected_pages": [13], "reference_answer": "长按主机启动键 3 秒以上，主机返回全能基站充电。"}
+{"id": "q16", "question": "为什么清扫时建议打开各个房间的房门？", "category": "产品使用", "answerable": true, "expected_pages": [8], "reference_answer": "为了更好地帮助主机探索整个空间、建立家居地图，首次使用前请打开各个房间的房门。"}
+{"id": "q17", "question": "双边刷的维护频率和更换频率分别是多少？", "category": "部件保养", "answerable": true, "expected_pages": [15], "reference_answer": "双边刷每 2 周维护一次，每 3-6 个月更换一次。"}
+{"id": "q18", "question": "浮动滚刷多久清理一次、多久更换？", "category": "部件保养", "answerable": true, "expected_pages": [15], "reference_answer": "浮动滚刷每 1 周清理一次，每 6-12 个月更换一次。"}
+{"id": "q19", "question": "污水箱多久清理一次？", "category": "部件保养", "answerable": true, "expected_pages": [15], "reference_answer": "污水箱每次拖地后清理。"}
+{"id": "q20", "question": "清水箱和过滤件分别多久清洁一次？", "category": "部件保养", "answerable": true, "expected_pages": [15], "reference_answer": "清水箱每 3 月清洁一次，过滤件每 1 月清洁一次。"}
+{"id": "q21", "question": "可水洗拖布多久更换一次？", "category": "部件保养", "answerable": true, "expected_pages": [15], "reference_answer": "可水洗拖布每 1-2 个月更换一次。"}
+{"id": "q22", "question": "尘盒和过滤棉清洗后要注意什么？", "category": "部件保养", "answerable": true, "expected_pages": [16], "reference_answer": "用清水冲洗，请勿用刷子或手刷洗高效过滤棉，且滤材必须完全晾干后再使用。"}
+{"id": "q23", "question": "清理下视感应器和缓冲防撞板能用湿抹布吗？", "category": "部件保养", "answerable": true, "expected_pages": [18], "reference_answer": "不能，清理下视感应器和缓冲防撞板请使用干抹布，勿用湿抹布以免进水损坏。"}
+{"id": "q24", "question": "长时间不使用产品应该怎么存放？", "category": "部件保养", "answerable": true, "expected_pages": [22], "reference_answer": "储存前先充满电，再关闭电源开关，并坚持每 1.5 个月补充电一次，以防电池过放。"}
+{"id": "q25", "question": "怎么更换尘袋？", "category": "部件保养", "answerable": true, "expected_pages": [20], "reference_answer": "取出旧尘袋（提手会把尘袋密闭），用干抹布擦拭集尘仓，装入新尘袋后关闭集尘仓。"}
+{"id": "q26", "question": "过滤件怎样安装才算到位？", "category": "部件保养", "answerable": true, "expected_pages": [21], "reference_answer": "过滤件贴合底板，将一侧卡扣滑入卡槽，另一卡扣顺势卡入，听到咔哒一声即安装完成。"}
+{"id": "q27", "question": "清洁传感器镜片和激光扫描模块能用清洗剂吗？", "category": "部件保养", "answerable": true, "expected_pages": [17], "reference_answer": "不能，请用干净的软布擦拭传感器镜片和 TrueMapping 激光扫描模块，不要使用洗剂、洗衣液或喷雾器。"}
+{"id": "q28", "question": "机器人无法连接 App 可能是什么原因？", "category": "故障排查", "answerable": true, "expected_pages": [23], "reference_answer": "路由器用户名或密码不正确、主机不在信号覆盖范围内、主机未处于待配置状态、使用了 5GHz 网络，或下载了错误的 App。"}
+{"id": "q29", "question": "地图丢失了怎么恢复？", "category": "故障排查", "answerable": true, "expected_pages": [23], "reference_answer": "把主机搬至全能基站前方尝试恢复，或在 App 地图管理中点击使用地图恢复，都不行则重新建图。"}
+{"id": "q30", "question": "找不到全能基站信号导致无法回充怎么办？", "category": "故障排查", "answerable": true, "expected_pages": [23], "reference_answer": "按说明书正确摆放全能基站、检查基站是否连接电源且未被人为移动、让主机从基站出发清扫，并保持回充路线通畅。"}
+{"id": "q31", "question": "主机无法充电可能是什么原因？", "category": "故障排查", "answerable": true, "expected_pages": [24], "reference_answer": "主机电源开关未打开、充电极片未充分接触或脏污、全能基站未连接电源，或长时间不使用导致电池过放。"}
+{"id": "q32", "question": "主机工作时运行声音变大怎么处理？", "category": "故障排查", "answerable": true, "expected_pages": [24], "reference_answer": "定期清理保养双边刷、浮动滚刷、尘盒与过滤材料；如果进入强劲清扫模式，可改为标准清扫模式。"}
+{"id": "q33", "question": "主机工作时陷入困境怎么办？", "category": "故障排查", "answerable": true, "expected_pages": [24], "reference_answer": "被电线、窗帘或地毯须边缠绕时主机自主脱困失败可手动帮助；被低矮家具卡住时建议垫高家具、遮挡或设置虚拟墙。"}
+{"id": "q34", "question": "AIVI 摄像头无法识别怎么办？", "category": "故障排查", "answerable": true, "expected_pages": [25], "reference_answer": "请在白天或打开房间灯清扫以保证光线充足，同时用软布擦拭镜片并移除遮挡物。"}
+{"id": "q35", "question": "主机返回全能基站后没有自动集尘，可能是什么原因？", "category": "故障排查", "answerable": true, "expected_pages": [25], "reference_answer": "集尘仓未关闭、未安装尘袋、手动搬动主机、处于勿扰模式、视频管家模式，或集尘效率降低需要更换尘袋。"}
+{"id": "q36", "question": "全能基站清洁槽水满无法吸出怎么办？", "category": "故障排查", "answerable": true, "expected_pages": [26], "reference_answer": "确认污水箱与封闭塞安装到位、清理清洁槽吸水口异物，并按键抽水、擦干清洁槽溢水感应片；仍报警可重新插拔基站电源。"}
+{"id": "q37", "question": "主机不响应全能基站指令怎么办？", "category": "故障排查", "answerable": true, "expected_pages": [26], "reference_answer": "距离过远时可改用 App 操作；若主机与基站未配对，可拔出基站插头等待 10 秒重插、重启主机并手动推上基站重新配对。"}
+{"id": "q38", "question": "产品型号是什么，售后电话是多少？", "category": "产品参数", "answerable": true, "expected_pages": [27], "reference_answer": "产品型号为 DBX23，售后服务中心电话是 400-886-8888。"}
+{"id": "q39", "question": "充电时间大约多久？", "category": "产品参数", "answerable": true, "expected_pages": [27], "reference_answer": "充电时间约 6.5 小时。"}
+{"id": "q40", "question": "集尘状态和洗拖布状态的功率分别是多少？", "category": "产品参数", "answerable": true, "expected_pages": [27], "reference_answer": "集尘状态功率 1000W，洗拖布状态功率 35W。"}
+{"id": "q41", "question": "本产品的环保使用期限是多少年？", "category": "售后与合规", "answerable": true, "expected_pages": [28], "reference_answer": "产品在正常使用状态下的环保使用期限为 10 年。"}
+{"id": "q42", "question": "产品执行哪些国家标准？", "category": "售后与合规", "answerable": true, "expected_pages": [28], "reference_answer": "执行标准包括 GB4706.1-2005、GB4706.7-2014、GB4343.1-2018 和 GB17625.1-2012。"}
+{"id": "q43", "question": "制造商名称和地址是什么？", "category": "售后与合规", "answerable": true, "expected_pages": [32], "reference_answer": "制造商名称：科沃斯机器人股份有限公司；地址：苏州市吴中区郭巷街道吴淞江产业园淞苇路 518 号。"}
+{"id": "u01", "question": "这台扫地机器人明年会涨价吗？", "category": "范围外", "answerable": false, "expected_pages": [], "reference_answer": "知识库不包含价格与定价政策信息，应拒答。"}
+{"id": "u02", "question": "这台机器人的整机保修期是多少年？", "category": "资料缺失", "answerable": false, "expected_pages": [], "reference_answer": "说明书中没有保修期信息，应拒答。"}
+{"id": "u03", "question": "机器人的最大吸力是多少帕？", "category": "资料缺失", "answerable": false, "expected_pages": [], "reference_answer": "说明书只给出输入电压、功率与充电时间，没有吸力数值，应拒答。"}
+{"id": "u04", "question": "这台机器人支持哪些第三方语音助手，比如小爱同学？", "category": "资料缺失", "answerable": false, "expected_pages": [], "reference_answer": "说明书未列出第三方语音助手支持情况，应拒答。"}
+{"id": "u05", "question": "这款产品上个月的销量是多少？", "category": "范围外", "answerable": false, "expected_pages": [], "reference_answer": "知识库不包含销量数据，应拒答。"}
+{"id": "u06", "question": "明天苏州的天气适合用扫地机器人清扫吗？", "category": "范围外", "answerable": false, "expected_pages": [], "reference_answer": "知识库不包含天气信息，应拒答。"}

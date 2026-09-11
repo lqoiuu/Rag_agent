@@ -34,9 +34,12 @@ RAG_SYSTEM_PROMPT = (
     "1. 只使用资料中明确写到的内容，不要用常识补充，也不要编造。\n"
     "2. 每个事实结论后面用方括号标注依据编号，例如 [1] 或 [1][3]。\n"
     "3. 如果资料不足以回答，把 status 设为 insufficient 并说明缺什么，不要猜测。\n"
-    "4. 只输出一个 JSON 对象，不要输出任何解释性文字或 Markdown 代码块。\n"
+    "4. citations 必须是整数数组，写成 [1, 2] 这种形式，禁止写成 [1][2]。\n"
+    "5. citations 里的编号是每条资料开头的 [n]，表示第几条资料；"
+    "它不是说明书里的章节号、表格序号或页码，不要混用。\n"
+    "6. 只输出一个 JSON 对象，不要输出任何解释性文字或 Markdown 代码块。\n"
     'JSON 格式：{"status": "answered" | "insufficient", "answer": "中文回答", '
-    '"citations": [编号], "reason": "status 为 insufficient 时的原因"}'
+    '"citations": [资料编号], "reason": "status 为 insufficient 时的原因"}'
 )
 
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
