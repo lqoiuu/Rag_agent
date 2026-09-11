@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from rag_agent.config import build_chat_model, build_embedding_model, get_settings
 from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
@@ -47,12 +49,41 @@ from rag_agent.ingestion import (
 from rag_agent.observability.logging import configure_logging
 from rag_agent.providers.base import ChatModel, EmbeddingModel, ModelError
 from rag_agent.retrieval import Retriever, RetrieverConfig
-from rag_agent.storage import MetadataStore
+from rag_agent.storage import BusinessRepository, MetadataStore
+from rag_agent.tools import (
+    DEVICE_LOOKUP,
+    ORDER_LOOKUP,
+    TICKET_CREATE,
+    TOOL_NAMES,
+    USER_LOOKUP,
+    CreateTicketArgs,
+    DeviceLookupArgs,
+    OrderLookupArgs,
+    UserLookupArgs,
+    create_ticket,
+    device_lookup,
+    order_lookup,
+    user_lookup,
+)
 from rag_agent.vectorstore import ChunkVectorStore
 
 EXIT_OK = 0
 EXIT_PARTIAL_FAILURE = 1
 EXIT_ERROR = 2
+
+TOOL_ARG_MODELS: dict[str, Any] = {
+    USER_LOOKUP: UserLookupArgs,
+    DEVICE_LOOKUP: DeviceLookupArgs,
+    ORDER_LOOKUP: OrderLookupArgs,
+    TICKET_CREATE: CreateTicketArgs,
+}
+
+TOOL_FUNCTIONS: dict[str, Any] = {
+    USER_LOOKUP: user_lookup,
+    DEVICE_LOOKUP: device_lookup,
+    ORDER_LOOKUP: order_lookup,
+    TICKET_CREATE: create_ticket,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
             "reindex",
             "delete-document",
             "evaluate",
+            "tool",
         ),
         help="Command to execute.",
     )
@@ -142,6 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Evaluate only the first N cases, for a quick check.",
+    )
+    parser.add_argument(
+        "--args",
+        default="",
+        help='JSON arguments for "tool", for example --args "{\\"user_id\\": \\"U1001\\"}".',
     )
     return parser
 
@@ -595,6 +632,63 @@ def _write_reports(report: Any, out_dir: Path) -> tuple[Path, Path]:
     return markdown_path, json_path
 
 
+def _tool(argument: str, raw_args: str) -> int:
+    """List tool contracts or call one tool without any agent involvement."""
+
+    settings = get_settings()
+    name = (argument or "list").strip()
+
+    if name == "list":
+        print(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "tools": [
+                        {
+                            "name": tool_name,
+                            "args_schema": TOOL_ARG_MODELS[tool_name].model_json_schema(),
+                        }
+                        for tool_name in TOOL_NAMES
+                    ],
+                    "note": "所有业务数据均为模拟数据，不代表真实个人或企业信息。",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    if name not in TOOL_FUNCTIONS:
+        _error_payload(
+            "unknown_tool",
+            f"unknown tool {name!r}; known tools: {', '.join(TOOL_NAMES)}",
+        )
+        return EXIT_ERROR
+
+    try:
+        payload = json.loads(raw_args) if raw_args.strip() else {}
+    except ValueError as exc:
+        _error_payload("invalid_argument", f"--args must be a JSON object: {exc}")
+        return EXIT_ERROR
+    if not isinstance(payload, dict):
+        _error_payload("invalid_argument", "--args must be a JSON object")
+        return EXIT_ERROR
+
+    try:
+        arguments = TOOL_ARG_MODELS[name].model_validate(payload)
+    except ValidationError as exc:
+        _error_payload("invalid_argument", f"invalid arguments: {exc.error_count()} error(s)")
+        return EXIT_ERROR
+
+    seed_path = settings.data_dir / "business" / "seed.json"
+    with BusinessRepository(settings.sqlite_path) as repository:
+        repository.seed_from_file(seed_path)
+        result = TOOL_FUNCTIONS[name](arguments, repository=repository)
+
+    print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
+    return EXIT_OK if result.ok else EXIT_PARTIAL_FAILURE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -667,6 +761,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             threshold=args.threshold,
             source=args.source,
         )
+
+    if args.command == "tool":
+        return _tool(args.argument or "", args.args)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 
