@@ -27,6 +27,13 @@ rag-agent-assistant/
 │   └── adr/
 │       ├── 0001-technology-stack.md
 │       └── 0002-provider-layer.md
+├── data/
+│   ├── eval/
+│   │   ├── qa_set.jsonl          # 评测集，随代码提交
+│   │   └── reports/              # 评测报告，随代码提交作为基线记录
+│   ├── raw/                      # 原始资料，本地数据，不提交
+│   ├── chroma/                   # 向量索引，本地数据，不提交
+│   └── rag_agent.sqlite3         # 元数据，本地数据，不提交
 ├── src/
 │   └── rag_agent/
 │       ├── __init__.py
@@ -42,6 +49,12 @@ rag-agent-assistant/
 │       │   ├── documents.py
 │       │   ├── errors.py
 │       │   └── retrieval.py
+│       ├── evaluation/
+│       │   ├── __init__.py
+│       │   ├── dataset.py
+│       │   ├── metrics.py
+│       │   ├── report.py
+│       │   └── runner.py
 │       ├── generation/
 │       │   ├── __init__.py
 │       │   ├── minimal_qa.py
@@ -85,7 +98,11 @@ rag-agent-assistant/
         ├── test_cli_chunk_report.py
         ├── test_cli_ingest.py
         ├── test_cli_search.py
+        ├── test_cli_evaluate.py
         ├── test_documents.py
+        ├── test_eval_dataset.py
+        ├── test_eval_metrics.py
+        ├── test_eval_runner.py
         ├── test_fake_providers.py
         ├── test_health.py
         ├── test_ingest_pipeline.py
@@ -105,7 +122,7 @@ rag-agent-assistant/
         └── test_splitters.py
 ~~~
 
-.git、.venv、缓存、字节码和本地运行数据不在结构图中显示。
+.git、.venv、缓存、字节码和本地运行数据不在结构图中显示；`data/eval/` 属于随代码提交的内容，因此单独列出。
 
 ## 根目录文件
 
@@ -156,6 +173,13 @@ rag-agent-assistant/
 | src/rag_agent/retrieval/__init__.py | 对外暴露检索器接口 | 模块边界 |
 | src/rag_agent/retrieval/retriever.py | 查询向量化、Top-K、来源过滤与阈值判定；单次调用可覆盖 top_k、threshold、source | 语义相似度、Top-K、阈值取舍 |
 
+| data/eval/qa_set.jsonl | 49 条评测用例（43 可回答、6 不可回答），含预期页码与参考答案 | 评测集设计、标注一致性 |
+| data/eval/reports/ | 每次评测生成的 Markdown 与 JSON 报告 | 基线记录、可复现性 |
+| src/rag_agent/evaluation/dataset.py | 加载并校验评测集：必填字段、重复 ID、可回答与页码的一致性 | 数据契约、校验 |
+| src/rag_agent/evaluation/metrics.py | Recall@K、MRR、引用正确率、拒答正确率、决策正确率与忠实度代理指标 | 检索评测与生成评测的区别 |
+| src/rag_agent/evaluation/runner.py | 检索模式与回答模式两种跑法，逐条记录并可汇总 | 实验条件记录 |
+| src/rag_agent/evaluation/report.py | 输出 Markdown 与 JSON 报告，附「需要关注的用例」小节 | 回归对比、可读性 |
+
 ## 测试
 
 | 文件 | 验证内容 |
@@ -189,6 +213,10 @@ rag-agent-assistant/
 | tests/unit/test_cli_answer.py | answer 的引用输出、拒答退出码、空索引不调用模型、`--stream` 先流后结果与缺密钥 |
 | tests/unit/test_qwen_stream.py | SSE 增量顺序、噪声与 `[DONE]` 忽略、状态码分类、首个增量后不重试、Fake 分片 |
 | tests/unit/test_ingestion_filters.py | 目录页识别、正常段落与标准表格不被误删、比例与最小行数可配置 |
+| tests/unit/test_eval_dataset.py | 评测集解析与校验：必填字段、重复 ID、不可回答不得带页码、随包数据集规模与可回答比例 |
+| tests/unit/test_eval_metrics.py | 命中排名与倒序排名、任意预期页匹配、空结果、忠实度代理、两种模式的汇总与决策正确率 |
+| tests/unit/test_eval_runner.py | 检索与回答两种模式跑通，引用正确性、拒答统计、无命中不调用模型与报告序列化 |
+| tests/unit/test_cli_evaluate.py | evaluate 命令的模式、limit、数据集错误、报告写出与缺密钥分支 |
 | tests/integration/test_qwen_live.py | 真实模型联网调用与 Embedding 维度一致性，默认跳过 |
 
 ## 稳定设计文档
@@ -216,6 +244,8 @@ rag-agent-assistant/
 阶段 6（检索器 V1 与可解释结果）已完成并通过验收，含真实检索实测与一次重要的负面发现。
 
 阶段 7（RAG 回答与来源引用）已完成并通过验收，含真实带引用回答、真实 Token 流式输出，以及阶段 6 遗留问题的处置。
+
+阶段 8（RAG 评测基线）已完成并通过验收，含 49 条评测集、检索与回答两条基线，以及一次用数据驱动的提示词改进。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -334,6 +364,31 @@ rag-agent-assistant/
 - **重排：暂不引入。** 理由是没有评测集就无法证明重排带来收益，而重排会引入额外模型调用成本；阶段 8 用 Recall@K 与 MRR 判定是否需要。
 - **阈值：角色重新定位为成本控制，而非正确性判定。** `is_confident` 的文档字符串已写明这一点，`RetrievalResult.margin` 新增为结构化字段，供阶段 8 分析相对信号是否有用（阶段 6 已证明它在这三条查询上不可分，因此本阶段不据此改判）。
 
+阶段 8 证据（2026-09-11 实际执行）：
+
+- 代码提交：`fe19ecd`。
+- `ruff check`：All checks passed；`mypy`（strict，files = ["src"]）：Success: no issues found in 38 source files。
+- `pytest`：268 passed, 2 skipped（在 DSH 沙箱内执行）；另有 19 个使用 `tmp_path` 的用例受沙箱限制，由学习者在本地确认，两处合计 287 passed, 2 skipped。
+- 评测集：49 条（43 条可回答、6 条不可回答），覆盖 24 个页面、7 个类别，位于 `data/eval/qa_set.jsonl`，随代码提交。
+- **检索基线**（`rag-agent evaluate`，确定性可重复）：
+
+  | 指标 | 数值 |
+  |---|---|
+  | Recall@5 | 0.9535（43 条中命中 41 条） |
+  | MRR | 0.8205 |
+  | 平均最高相似度 | 0.6585 |
+  | 平均前两名分差 | 0.0613 |
+
+- **两条漏检的根因**：q01（潮湿地面能否使用）与 q03（儿童能否使用）的预期页都是第 2 页，但 top-5 完全没有第 2 页分片。原因是第 2 页的两个分片有 750 至 777 字符、塞进了 17 条与 12 条互不相关的规则，主题被稀释，打不过聚焦单一主题的短分片。**这两条的 best_score 分别是 0.6731 与 0.6429，都高于可回答组的中位数 0.6495，因此任何阈值都救不了它们。**
+- **阶段 6 遗留问题的最终答案（用 49 条数据而非 3 条）**：可回答组的最高相似度区间是 [0.4938, 0.8689]，不可回答组是 [0.4415, 0.6020]，**两组重叠 0.1082**；前两名分差同样重叠（可回答 [0.0010, 0.2353]，不可回答 [0.0040, 0.0417]）。结论：**不存在能把两组分开的单一阈值或单一分差阈值**，阈值只能作为成本控制的下界，拒答必须由依据约束与引用校验承担。
+- **回答基线**（指标口径修正后）：回答率 0.6744、引用正确率 0.8276、拒答正确率 1.0、决策正确率 0.7143、忠实度代理 0.5706；拒答原因分布为 `model_insufficient` 9、`unparseable` 5、`no_valid_citation` 6。
+- **根因定位**：`unparseable` 全部是模型把 citations 写成了 `[3][9][11][2]` 这种非法 JSON；`no_valid_citation` 集中在故障排查类，模型引用的是说明书表格里的“序号”（8、9、13、14、19、22），而上下文只有 5 条资料，编号越界后被丢弃。
+- **一次数据驱动的改进**：在提示词中明确 citations 必须是整数数组、并说明编号含义。重测结果——回答率 **0.6744 → 0.7907**（+11.6 个百分点），决策正确率 **0.7143 → 0.8163**，`unparseable` **5 → 0**，拒答正确率保持 1.0，引用正确率 0.8276 → 0.7941（回答变多、精度略降）。这是一次有前后对照的改进，而不是主观断言。
+- **尚未解决**：`no_valid_citation` 仍为 6（表格序号混淆未被那条规则消除）；`model_insufficient` 为 9，其中 2 条由检索漏检导致，1 条（q30）是检索命中但生成没有答出来。
+- **指标口径说明**：检索按页粒度计分（评测集能可靠标注到页，未做分片级人工标注）；忠实度是代理指标，计算答案的 4-gram 在**引用分片全文**中的覆盖率，可被照抄误导、也无法识别“用对的原文得出错结论”，因此必须与引用正确率、拒答正确率一起看。
+- **运行间波动**：检索指标确定可重复；回答指标会波动（两次基线运行的 `unparseable` 分别为 4 与 5），因此回答模式的对比不能只看单次结果。
+- 可重复执行：`rag-agent evaluate --mode retrieval`（仅查询 Embedding）与 `rag-agent evaluate --mode answer`（每条约 2 个请求），报告写入 `data/eval/reports/`。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
@@ -374,24 +429,26 @@ rag-agent-assistant/
 - `rag-agent answer "问题"` 命令行问答，支持 `--stream` 真实 Token 增量输出。
 - Provider 层的 SSE 流式解析，首个增量之后不再重试，避免重复输出。
 - 入库前过滤目录或索引类分片，规则确定、可关闭。
+- 49 条带预期页码与参考答案的离线评测集，覆盖安全、使用、保养、故障、参数、合规与范围外问题。
+- `rag-agent evaluate --mode retrieval|answer` 一条命令生成 Markdown 与 JSON 报告，并列出需要关注的用例。
+- 检索指标（Recall@K、MRR）与回答指标（回答率、引用正确率、拒答正确率、决策正确率、忠实度代理）分开度量。
 
 ## 尚未实现
 
 - 用户、设备、订单和工单工具。
 - LangGraph 路由、Checkpoint 和人工确认。
-- RAG 离线评测、Streamlit 界面、安全降级和 Docker 交付。
+- Streamlit 界面、安全降级和 Docker 交付。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
-- 重排与阈值校准，需等阶段 8 的评测集给出依据。
+- 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
+- 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
+- 表格序号与上下文编号混淆导致的引用越界（6 条），需要更强的格式约束或校验提示。
 
 ## 最近结构变化
 
-本次同步（阶段 7）相对上一次的主要变化：
+本次同步（阶段 8）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/domain/citation.py`，承载引用模型。
-- 新增 `src/rag_agent/generation/rag_answer.py`，承载带引用校验的 RAG 回答。
-- 新增 `src/rag_agent/ingestion/filters.py`，承载目录类分片过滤规则。
-- `providers/base.py`、`qwen.py`、`fake.py` 增加 `stream_chat` 与 SSE 解析。
-- `domain/retrieval.py` 增加 `margin` 字段。
-- `ingestion/pipeline.py` 增加入库前过滤与 `dropped_chunks` 统计。
-- `src/rag_agent/__main__.py` 新增 `answer` 命令与 `--stream`、`--keep-index-chunks`。
+- 新增 `src/rag_agent/evaluation/`，承载评测集、指标、执行器与报告。
+- 新增 `data/eval/qa_set.jsonl` 与 `data/eval/reports/`，并首次把评测内容纳入版本库。
+- `src/rag_agent/__main__.py` 新增 `evaluate` 命令与 `--mode`、`--dataset`、`--out`、`--limit`。
+- `src/rag_agent/generation/rag_answer.py` 的提示词明确 citations 为整数数组并说明编号含义。
 - `tests/unit/` 新增四个测试文件。
