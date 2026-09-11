@@ -322,6 +322,127 @@ def test_unknown_thread_action_is_reported(
     assert payload["code"] == "unknown_action"
 
 
+def test_chat_reports_turn_metrics(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
+) -> None:
+    """A turn must report what it measured, not only what it answered."""
+
+    install(monkeypatch, workspace, intent_reply("knowledge"), answer_reply(MANUAL_PAGE_27))
+
+    cli.main(["chat", MANUAL_PAGE_27, "--user-id", "U1001", "--thread-id", "T1"])
+    payload = json.loads(capsys.readouterr().out)
+
+    metrics = payload["metrics"]
+    assert metrics is not None
+    assert metrics["total_ms"] > 0
+    assert metrics["retrieval"]["hits"] > 0
+    assert metrics["tools"] == {
+        "calls": 0,
+        "failures": 0,
+        "success_rate": 1.0,
+        "error_codes": [],
+    }
+    assert metrics["injection_suspected"] == []
+
+
+def test_chat_exposes_the_turn_separately_from_the_accumulated_thread(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
+) -> None:
+    """The payload must let a reader tell this turn's work from the thread's history."""
+
+    install(monkeypatch, workspace, intent_reply("device"), intent_reply("device"))
+    cli.main(["chat", "D2002 还在保修吗", "--user-id", "U1001", "--thread-id", "T1"])
+    capsys.readouterr()
+
+    exit_code = cli.main(["chat", "D2001 还在保修吗", "--user-id", "U1001", "--thread-id", "T1"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["turn"]["trace"] == ["classify:device", "device:ok"]
+    assert len(payload["turn"]["tool_results"]) == 2
+    assert len(payload["trace"]) > len(payload["turn"]["trace"])
+    assert len(payload["tool_results"]) > len(payload["turn"]["tool_results"])
+
+
+def test_a_support_agent_reaches_the_device_tool_for_a_foreign_device(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
+) -> None:
+    """``--role`` is the caller's declaration, and the role has to actually do something.
+
+    The point asserted here is the *permission* outcome: with ``end_user`` the tool refuses
+    before reading anything, so the error code is ``permission_denied``. The other assertions
+    are deliberately weaker — the caller id does not exist in the simulated data, so the
+    lookup may legitimately report ``not_found``, and pretending otherwise would be asserting
+    the fixture rather than the behaviour.
+    """
+
+    install(monkeypatch, workspace, intent_reply("device"), intent_reply("device"))
+
+    cli.main(
+        [
+            "chat",
+            "D2003 还在保修吗",
+            "--user-id",
+            "U1002",
+            "--thread-id",
+            "T-support",
+            "--role",
+            "support_agent",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["error_code"] != "permission_denied"
+    assert (payload["tool_results"] or [{}])[0]["tool"] == "device.lookup"
+
+
+def test_a_plain_user_is_denied_another_users_device(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
+) -> None:
+    """An undeclared role stays the strict default, so a foreign device is refused.
+
+    The code is deliberately not pinned: ``not_found`` and ``permission_denied`` are both
+    legitimate refusals here, and asserting one would be asserting the fixture rather than the
+    permission behaviour.
+    """
+
+    install(monkeypatch, workspace, intent_reply("device"), intent_reply("device"))
+
+    exit_code = cli.main(
+        ["chat", "D2003 还在保修吗", "--user-id", "U9999", "--thread-id", "T-denied"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["error_code"] in {"permission_denied", "not_found"}
+    assert payload["status"] == "error"
+
+
+def test_an_unknown_role_falls_back_to_the_least_privileged_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
+) -> None:
+    """A typo in ``--role`` must not be read as a promotion."""
+
+    install(monkeypatch, workspace, intent_reply("device"))
+
+    exit_code = cli.main(
+        [
+            "chat",
+            "D2003 还在保修吗",
+            "--user-id",
+            "U9999",
+            "--thread-id",
+            "T-typo",
+            "--role",
+            "administrator",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["error_code"] == "permission_denied"
+
+
 def test_bad_preference_syntax_is_rejected(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workspace: Settings
 ) -> None:

@@ -51,6 +51,9 @@ class AgentState(TypedDict, total=False):
     intent_confidence: float
     intent_source: str
     intent_reason: str
+    #: 调用方声明的角色，由入口写入。只读用途：权限判定在构造 AgentNodes 时完成，
+    #: 这个字段是为了让「这次是谁在问」可追溯。
+    caller_role: str
 
     # 澄清
     clarification_turns: int
@@ -62,6 +65,8 @@ class AgentState(TypedDict, total=False):
     citations: list[dict[str, object]]
     evidence_count: int
     retrieval_confident: bool
+    #: 检索到的资料里形似指令的文字（只上报，不改变回答）
+    injection_suspected: list[str]
     tool_results: Annotated[list[dict[str, object]], operator.add]
     tool_error_code: str | None
 

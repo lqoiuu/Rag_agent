@@ -51,9 +51,11 @@ from rag_agent.memory.conversation import (
     render_prompt_context,
     trim_messages,
 )
+from rag_agent.observability.metrics import StageTiming, TurnMetrics
 from rag_agent.providers.base import ChatModel
 from rag_agent.retrieval.retriever import Retriever
 from rag_agent.storage.business import BusinessRepository
+from rag_agent.tools.permissions import ToolPermissions
 
 DEFAULT_RECURSION_LIMIT = 12
 
@@ -85,6 +87,12 @@ class AgentRun:
     error_code: str | None
     error_message: str | None
     clarification_turns: int
+    injection_suspected: tuple[str, ...] = ()
+    """Instruction-shaped text found in the retrieved evidence, if any.
+
+    Reported so a reader can see that a document looked like it was giving orders; it never
+    altered the answer, which still had to survive citation validation.
+    """
 
     @property
     def answered(self) -> bool:
@@ -105,6 +113,7 @@ class AgentRun:
             "error_code": self.error_code,
             "error_message": self.error_message,
             "clarification_turns": self.clarification_turns,
+            "injection_suspected": list(self.injection_suspected),
             "trace": list(self.trace),
         }
 
@@ -137,6 +146,7 @@ class ChatTurn:
     checkpoints_before: int
     checkpoints_after: int
     contribution: _Contribution | None = None
+    metrics: TurnMetrics | None = None
 
     @property
     def status(self) -> str:
@@ -195,6 +205,11 @@ class ChatTurn:
                 "checkpoints_before": self.checkpoints_before,
                 "checkpoints_after": self.checkpoints_after,
             },
+            "turn": {
+                "trace": list(self.turn_trace),
+                "tool_results": list(self.turn_tool_results),
+            },
+            "metrics": self.metrics.as_dict() if self.metrics is not None else None,
         }
 
 
@@ -205,14 +220,21 @@ def build_agent_graph(
     repository: BusinessRepository,
     max_clarifications: int = DEFAULT_MAX_CLARIFICATIONS,
     checkpointer: Any | None = None,
+    permissions: ToolPermissions | None = None,
 ) -> Any:
-    """Compile the workflow; node order and edges are fixed here, not by prompts."""
+    """Compile the workflow; node order and edges are fixed here, not by prompts.
+
+    ``permissions`` is the caller's declared identity and role. It is a construction-time
+    argument rather than a piece of graph state on purpose: nothing that flows through the
+    model's reach can widen it, and the tool layer refuses when it is absent.
+    """
 
     nodes = AgentNodes(
         retriever=retriever,
         chat_model=chat_model,
         repository=repository,
         max_clarifications=max_clarifications,
+        permissions=permissions,
     )
 
     builder: Any = StateGraph(AgentState)
@@ -300,6 +322,7 @@ def run_agent(
     clarification_turns: int = 0,
     max_clarifications: int = DEFAULT_MAX_CLARIFICATIONS,
     recursion_limit: int = DEFAULT_RECURSION_LIMIT,
+    permissions: ToolPermissions | None = None,
 ) -> AgentRun:
     """Run one stateless turn and return a typed result.
 
@@ -313,6 +336,7 @@ def run_agent(
         chat_model=chat_model,
         repository=repository,
         max_clarifications=max_clarifications,
+        permissions=permissions,
     )
     initial = build_initial_state(
         question,
@@ -348,6 +372,7 @@ def chat_turn(
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}
     checkpoints_before = _count_checkpoints(graph, thread_id)
     contribution_before = _capture_contribution(graph, config)
+    started = time.perf_counter()
 
     if resume is None:
         history = _history(graph, config)
@@ -378,7 +403,55 @@ def chat_turn(
         checkpoints_before=checkpoints_before,
         checkpoints_after=_count_checkpoints(graph, thread_id),
         contribution=contribution_before,
+        metrics=build_turn_metrics(
+            cast("AgentState", result),
+            thread_id=thread_id,
+            total_ms=(time.perf_counter() - started) * 1000.0,
+        ),
     )
+
+
+def build_turn_metrics(
+    state: AgentState,
+    *,
+    thread_id: str,
+    total_ms: float,
+) -> TurnMetrics:
+    """Summarise what one turn did, from what the state actually recorded.
+
+    Only measured values are reported. Two points worth being explicit about:
+
+    * token counts come from the provider layer, which logs them but does not put them in the
+      graph state, so this layer cannot supply them. They are reported as zero rather than
+      estimated, and the CLI surfaces the provider's own token line alongside.
+    * an attempt count above one means the provider retried. That is the closest thing to a
+      per-stage signal available here without adding a tracing dependency.
+    """
+
+    metrics = TurnMetrics(thread_id=thread_id)
+    metrics.stages.append(StageTiming(name="turn", duration_ms=total_ms))
+
+    evidence_count = state.get("evidence_count")
+    if isinstance(evidence_count, int):
+        confident = state.get("retrieval_confident")
+        metrics.record_retrieval(
+            hits=evidence_count,
+            confident=confident if isinstance(confident, bool) else None,
+        )
+    elif str(state.get("intent", "")) == str(Intent.KNOWLEDGE):
+        # 走知识分支却没有证据数：检索为空，这是真实结果，不是「没测到」。
+        metrics.record_retrieval(hits=0, confident=False)
+
+    for entry in state.get("tool_results") or []:
+        if not isinstance(entry, dict):
+            continue
+        ok = entry.get("status") == "ok"
+        metrics.record_tool_result(
+            tool=str(entry.get("tool", "unknown")),
+            ok=ok,
+            error_code=None if ok else str(entry.get("error_code") or ""),
+        )
+    return metrics
 
 
 def _capture_contribution(graph: Any, config: dict[str, Any]) -> _Contribution:
@@ -562,6 +635,7 @@ def _stream_turn(
             error_code=None if answer.refusal_cause is None else str(answer.refusal_cause),
             error_message=answer.reason,
             clarification_turns=0,
+            injection_suspected=answer.injection_suspected,
         ),
         window=window,
         preferences=dict(preferences),
@@ -623,6 +697,7 @@ def _to_run(question: str, state: AgentState) -> AgentRun:
         error_code=state.get("error_code"),
         error_message=state.get("error_message"),
         clarification_turns=int(state.get("clarification_turns", 0)),
+        injection_suspected=tuple(state.get("injection_suspected", ())),
     )
 
 

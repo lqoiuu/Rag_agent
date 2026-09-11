@@ -63,6 +63,7 @@ from rag_agent.memory import (
     ThreadOwnershipError,
     render_prompt_context,
 )
+from rag_agent.observability import for_model_error
 from rag_agent.observability.logging import configure_logging
 from rag_agent.providers.base import ChatModel, EmbeddingModel, ModelError
 from rag_agent.retrieval import Retriever, RetrieverConfig
@@ -76,7 +77,9 @@ from rag_agent.tools import (
     CreateTicketArgs,
     DeviceLookupArgs,
     OrderLookupArgs,
+    ToolPermissions,
     UserLookupArgs,
+    assign_role,
     create_ticket,
     device_lookup,
     order_lookup,
@@ -219,6 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         help='Conversation id for "chat" and "thread"; one id is one isolated conversation.',
     )
     parser.add_argument(
+        "--role",
+        default="",
+        help="Caller role for the 'agent' and 'chat' commands: end_user (default) or "
+        "support_agent. Declared by the caller; a requested role can only lower the "
+        "granted one, never raise it.",
+    )
+    parser.add_argument(
         "--preference",
         action="append",
         default=[],
@@ -238,6 +248,30 @@ def _error_payload(code: str, message: str) -> None:
     print(json.dumps({"status": "error", "code": code, "message": message}, ensure_ascii=False))
 
 
+def _degraded_payload(code: str, message: str) -> None:
+    """Report a failure together with what the caller should do about it.
+
+    The policy table (``observability.degradation``) decides the action and the wording shown
+    to a user; the raw message stays in the payload so a developer can still see the cause. A
+    failure is never reported as a normal answer.
+    """
+
+    plan = for_model_error(code)
+    print(
+        json.dumps(
+            {
+                "status": "error",
+                "code": code,
+                "action": str(plan.action),
+                "retryable": plan.retryable,
+                "user_message": plan.user_message,
+                "message": message,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
 def _ask(question: str) -> int:
     """Answer one question through the configured provider layer."""
 
@@ -245,7 +279,7 @@ def _ask(question: str) -> int:
         with build_chat_model() as model:
             answer = answer_question(model, question)
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
 
     payload = answer.model_dump()
@@ -376,7 +410,7 @@ def _answer(
                     source=source or None,
                 )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
@@ -459,7 +493,7 @@ def _search(query: str, *, top_k: int | None, threshold: float | None, source: s
                 source=source or None,
             )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
@@ -523,7 +557,7 @@ def _ingest(path: str, *, force: bool, keep_index_chunks: bool = False) -> int:
                     ),
                 )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except IngestionError as exc:
         _error_payload(exc.code, str(exc))
@@ -545,7 +579,7 @@ def _reindex(*, keep_index_chunks: bool = False) -> int:
                 drop_index_like_chunks=not keep_index_chunks,
             )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except IngestionError as exc:
         _error_payload(exc.code, str(exc))
@@ -560,7 +594,7 @@ def _delete_document(source: str) -> int:
         with _open_index(settings) as (store, vectors, _model):
             result = remove_document(source, store=store, vectors=vectors)
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except IngestionError as exc:
         _error_payload(exc.code, str(exc))
@@ -648,7 +682,7 @@ def _evaluate(
                     conditions=conditions,
                 )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
@@ -766,6 +800,7 @@ def _agent(
     user_id: str,
     device_id: str,
     contact: str,
+    role: str = "",
 ) -> int:
     """Run one stateless turn of the LangGraph workflow and print its trace.
 
@@ -776,6 +811,7 @@ def _agent(
     """
 
     settings = get_settings()
+    permissions = ToolPermissions(user_id=user_id or None, role=assign_role(role))
     try:
         with _open_agent(settings) as (retriever, chat_model, repository):
             run = run_agent(
@@ -786,9 +822,10 @@ def _agent(
                 user_id=user_id or None,
                 device_id=device_id or None,
                 contact=contact or None,
+                permissions=permissions,
             )
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
@@ -861,6 +898,7 @@ def _chat(
     cancel: bool,
     preferences: Sequence[str],
     window: int | None,
+    role: str = "",
 ) -> int:
     """Run one turn of a persisted conversation, or resolve a pending action."""
 
@@ -875,6 +913,9 @@ def _chat(
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
         return EXIT_ERROR
+
+    # 角色由命令行声明，且只能下调（assign_role 的 granted 是 end_user）。
+    permissions = ToolPermissions(user_id=user_id or None, role=assign_role(role))
 
     try:
         with _open_conversation(settings) as (
@@ -895,6 +936,7 @@ def _chat(
                 chat_model=chat_model,
                 repository=repository,
                 checkpointer=checkpointer,
+                permissions=permissions,
             )
             turn = chat_turn(
                 graph,
@@ -913,7 +955,7 @@ def _chat(
         _error_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ModelError as exc:
-        _error_payload(exc.code, str(exc))
+        _degraded_payload(exc.code, str(exc))
         return EXIT_ERROR
     except ValueError as exc:
         _error_payload("invalid_argument", str(exc))
@@ -1129,6 +1171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             user_id=args.user_id,
             device_id=args.device_id,
             contact=args.contact,
+            role=args.role,
         )
 
     if args.command == "chat":
@@ -1152,6 +1195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cancel=args.cancel,
             preferences=args.preference,
             window=args.window,
+            role=args.role,
         )
 
     if args.command == "thread":

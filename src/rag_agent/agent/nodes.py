@@ -33,6 +33,7 @@ from rag_agent.storage.business import BusinessRepository
 from rag_agent.tools.business import create_ticket, device_lookup, order_lookup
 from rag_agent.tools.errors import ToolError
 from rag_agent.tools.models import CreateTicketArgs, DeviceLookupArgs, OrderLookupArgs
+from rag_agent.tools.permissions import ToolPermissions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +69,12 @@ class AgentNodes:
     chat_model: ChatModel
     repository: BusinessRepository
     max_clarifications: int = DEFAULT_MAX_CLARIFICATIONS
+    permissions: ToolPermissions | None = None
+    """Declared by the caller, never inferred from anything the model produced.
+
+    ``None`` means "not declared", which the tool layer treats as the strict default: a
+    caller that forgets to pass permissions cannot accidentally widen access.
+    """
 
     def classify(self, state: AgentState) -> dict[str, object]:
         """Decide the task type; unusable answers fall back to ``unknown``.
@@ -99,6 +106,8 @@ class AgentNodes:
             "intent_confidence": decision.confidence,
             "intent_source": decision.source,
             "intent_reason": decision.reason,
+            # 调用方声明的角色随状态留痕，便于回答「这次是谁在问」。
+            "caller_role": str(self.permissions.role) if self.permissions else "unspecified",
             "trace": trace,
         }
 
@@ -120,6 +129,7 @@ class AgentNodes:
                 "citations": citations,
                 "evidence_count": len(answer.hits),
                 "retrieval_confident": answer.confident,
+                "injection_suspected": list(answer.injection_suspected),
                 "trace": [f"knowledge:answered:citations={len(citations)}"],
             }
         return {
@@ -128,6 +138,7 @@ class AgentNodes:
             "citations": [],
             "evidence_count": len(answer.hits),
             "retrieval_confident": answer.confident,
+            "injection_suspected": list(answer.injection_suspected),
             "error_code": None if answer.refusal_cause is None else str(answer.refusal_cause),
             "error_message": answer.reason,
             "trace": [f"knowledge:refused:{answer.refusal_cause}"],
@@ -145,6 +156,7 @@ class AgentNodes:
         device_result = device_lookup(
             DeviceLookupArgs(device_id=requested_device, user_id=user_id),
             repository=self.repository,
+            permissions=self.permissions,
         )
         results.append(device_result.model_dump())
         if not device_result.ok:
@@ -157,7 +169,11 @@ class AgentNodes:
                 "trace": [f"device:failed:{device_result.error_code}"],
             }
 
-        order_result = order_lookup(OrderLookupArgs(user_id=user_id), repository=self.repository)
+        order_result = order_lookup(
+            OrderLookupArgs(user_id=user_id),
+            repository=self.repository,
+            permissions=self.permissions,
+        )
         results.append(order_result.model_dump())
         return {
             "status": STATUS_ANSWERED,
@@ -245,6 +261,7 @@ class AgentNodes:
                     confirmed=True,
                 ),
                 repository=self.repository,
+                permissions=self.permissions,
             )
         except ToolError as exc:  # pragma: no cover - 工具内部已转成结果
             return {

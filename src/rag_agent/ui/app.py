@@ -32,6 +32,7 @@ _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from rag_agent.tools import ToolPermissions, assign_role  # noqa: E402
 from rag_agent.ui.services import default_user_id, get_resources, new_thread_id  # noqa: E402
 
 PAGES = [
@@ -53,11 +54,26 @@ def initialise_session() -> None:
     st.session_state.setdefault("user_id", default_user_id())
     st.session_state.setdefault("thread_id", new_thread_id())
     st.session_state.setdefault("thread_input", st.session_state.thread_id)
+    st.session_state.setdefault("role_choice", "end_user")
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("pending_action", None)
     st.session_state.setdefault("last_turn", None)
     st.session_state.setdefault("delegated_from", None)
     st.session_state.setdefault("flash", None)
+
+
+def current_permissions() -> ToolPermissions:
+    """The caller's declared identity and role for this session.
+
+    The role is chosen in the sidebar and can only be lowered: ``assign_role`` never raises a
+    role above the granted default, so the selector cannot be used to promote oneself even if
+    its value were manipulated.
+    """
+
+    return ToolPermissions(
+        user_id=str(st.session_state.get("user_id") or "") or None,
+        role=assign_role(str(st.session_state.get("role_choice") or "")),
+    )
 
 
 def adopt_thread_from_widget() -> None:
@@ -89,6 +105,15 @@ def sidebar() -> None:
             "真实的登录与授权尚未实现。"
         )
         st.text_input("用户编号", key="user_id")
+        st.segmented_control(
+            "调用角色",
+            options=["end_user", "support_agent"],
+            key="role_choice",
+            help=(
+                "由调用方声明，不是模型决定的。end_user 只能读自己的记录；"
+                "support_agent 可跨用户读取。角色只能下调，不能上调。"
+            ),
+        )
         st.text_input(
             "会话编号",
             key="thread_input",

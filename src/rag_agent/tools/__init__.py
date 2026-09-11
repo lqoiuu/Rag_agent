@@ -28,10 +28,17 @@ from rag_agent.tools.models import (
     ToolResult,
     UserLookupArgs,
 )
+from rag_agent.tools.permissions import (
+    ROLE_ALLOWED_TOOLS,
+    Role,
+    ToolPermissions,
+    assign_role,
+)
 
 __all__ = [
     "DEVICE_LOOKUP",
     "ORDER_LOOKUP",
+    "ROLE_ALLOWED_TOOLS",
     "TICKET_CREATE",
     "TOOL_NAMES",
     "USER_LOOKUP",
@@ -43,11 +50,14 @@ __all__ = [
     "NotFoundError",
     "OrderLookupArgs",
     "PermissionDeniedError",
+    "Role",
     "TicketDraft",
     "ToolError",
+    "ToolPermissions",
     "ToolResult",
     "ToolUnavailableError",
     "UserLookupArgs",
+    "assign_role",
     "create_ticket",
     "device_lookup",
     "order_lookup",

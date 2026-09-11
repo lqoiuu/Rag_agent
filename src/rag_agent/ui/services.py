@@ -32,6 +32,7 @@ from rag_agent.config.settings import Settings
 from rag_agent.memory import ConversationStore, SQLiteCheckpointer
 from rag_agent.retrieval import Retriever, RetrieverConfig
 from rag_agent.storage import BusinessRepository, MetadataStore
+from rag_agent.tools import ToolPermissions, assign_role
 from rag_agent.vectorstore import ChunkVectorStore
 
 
@@ -134,6 +135,22 @@ def raw_directory(settings: Settings) -> Path:
     return target
 
 
+def session_permissions() -> ToolPermissions:
+    """The caller's declared identity and role for the current session.
+
+    Lives here rather than in the entry point because both the router and the pages need it,
+    and a page importing the entry module would create a cycle. The role only ever comes from
+    an explicit session value and can only be lowered (``assign_role``), so nothing reachable
+    from the model can widen it.
+    """
+
+    state = st.session_state
+    return ToolPermissions(
+        user_id=str(state.get("user_id") or "") or None,
+        role=assign_role(str(state.get("role_choice") or "")),
+    )
+
+
 __all__ = [
     "AppResources",
     "build_resources",
@@ -141,4 +158,5 @@ __all__ = [
     "get_resources",
     "new_thread_id",
     "raw_directory",
+    "session_permissions",
 ]

@@ -15,6 +15,7 @@ from rag_agent.generation import (
     RefusalCause,
     answer_with_context,
     build_context,
+    classify_dropped_citations,
     parse_model_payload,
 )
 from rag_agent.observability import EVIDENCE_END, EVIDENCE_START
@@ -231,6 +232,53 @@ def test_injection_reporting_survives_a_refusal() -> None:
 
     assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
     assert "override_instructions" in answer.injection_suspected
+
+
+def test_dropped_citations_are_split_by_cause() -> None:
+    """A table number and an invented number look the same but are different mistakes."""
+
+    hits = make_hits("故障排查表：8 主机无法充电 9 机器陷入困境 13 AIVI 摄像头", *CONTENTS[1:])
+
+    breakdown = classify_dropped_citations((8, 9, 42), hits)
+
+    assert breakdown["from_table"] == (8, 9)
+    assert breakdown["invented"] == (42,)
+
+
+def test_a_number_inside_a_longer_figure_is_not_a_table_number() -> None:
+    """``20V``, ``2A`` and ``6.5`` are measurements, not table rows."""
+
+    hits = make_hits("额定输入 20V 2A，充电时间约 6.5 小时", *CONTENTS[1:])
+
+    breakdown = classify_dropped_citations((20, 2, 6, 5), hits)
+
+    assert breakdown["from_table"] == ()
+    assert breakdown["invented"] == (20, 2, 6, 5)
+
+
+def test_a_standalone_row_number_is_a_table_number() -> None:
+    hits = make_hits(
+        "故障现象与处理方法：8 主机无法充电 9 机器陷入困境 13 摄像头异常", *CONTENTS[1:]
+    )
+
+    breakdown = classify_dropped_citations((8, 9, 13), hits)
+
+    assert breakdown["from_table"] == (8, 9, 13)
+    assert breakdown["invented"] == ()
+
+
+def test_nothing_dropped_yields_an_empty_breakdown() -> None:
+    assert classify_dropped_citations((), make_hits(*CONTENTS)) == {
+        "from_table": (),
+        "invented": (),
+    }
+
+
+def test_the_prompt_warns_that_table_numbers_are_not_citations() -> None:
+    """The rule that addresses the six measured refusals must be in the system prompt."""
+
+    assert "表格序号" in RAG_SYSTEM_PROMPT
+    assert "不能" in RAG_SYSTEM_PROMPT
 
 
 def test_context_keeps_every_hit_when_within_budget() -> None:

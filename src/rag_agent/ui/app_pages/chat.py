@@ -25,7 +25,7 @@ from rag_agent.agent import (
     chat_turn,
     stream_chat_turn,
 )
-from rag_agent.ui.services import get_resources
+from rag_agent.ui.services import get_resources, session_permissions
 
 STATUS_LABELS = {
     STATUS_ANSWERED: ("已作答", "green"),
@@ -70,11 +70,38 @@ def render_tool_results(results: tuple[dict[str, Any], ...]) -> None:
             st.json(entry.get("data") if ok else {"error": entry.get("error_message")})
 
 
+def render_metrics(turn: Any) -> None:
+    """Show what this turn measured, and be explicit about the number that is missing."""
+
+    metrics = turn.metrics
+    if metrics is None:
+        return
+    payload = metrics.as_dict()
+    with st.expander("本轮指标（实测）", expanded=False):
+        left, middle, right = st.columns(3)
+        left.metric("本轮耗时", f"{payload['total_ms']} ms")
+        middle.metric("检索命中", payload["retrieval"]["hits"])
+        right.metric("工具成功率", f"{payload['tools']['success_rate']:.0%}")
+        st.caption(
+            "token 用量由 Provider 层记录在日志里，没有进入图状态，因此这里显示为 0 而不是估算值。"
+            f"模型调用次数：{payload['model_calls']}。"
+        )
+        st.json(payload)
+
+
 def render_turn(turn: Any, *, show_history: bool) -> None:
     """Render one turn: this turn's activity, then its answer, then citations."""
 
     if turn.run.intent_source == "delegated":
         return
+
+    if turn.run.injection_suspected:
+        st.warning(
+            "检索到的资料里出现了形似指令的文字（"
+            + "、".join(turn.run.injection_suspected)
+            + "），已按**数据**处理、未照做。回答仍只依据资料编号，并经过引用校验。",
+            icon=":material/gpp_maybe:",
+        )
 
     label, colour = STATUS_LABELS.get(turn.status, (turn.status, "gray"))
     st.badge(label, color=colour, icon=":material/label:")
@@ -88,6 +115,7 @@ def render_turn(turn: Any, *, show_history: bool) -> None:
 
     render_tool_results(turn.turn_tool_results)
     render_citations(list(turn.run.citations))
+    render_metrics(turn)
 
     if show_history:
         with st.expander("本轮回合的节点轨迹", expanded=False):
@@ -118,6 +146,7 @@ def stream_answer(question: str) -> tuple[Any, str]:
         chat_model=resources.chat_model,
         repository=resources.repository,
         checkpointer=resources.checkpointer,
+        permissions=session_permissions(),
     )
     turn: Any = None
     raw_chunks: list[str] = []
@@ -150,6 +179,7 @@ def run_agent_turn(question: str) -> Any:
         chat_model=resources.chat_model,
         repository=resources.repository,
         checkpointer=resources.checkpointer,
+        permissions=session_permissions(),
     )
     return chat_turn(
         graph,
@@ -183,6 +213,7 @@ def record_turn(turn: Any, question: str) -> None:
         chat_model=resources.chat_model,
         repository=resources.repository,
         checkpointer=resources.checkpointer,
+        permissions=session_permissions(),
     )
     graph.update_state(
         {"configurable": {"thread_id": st.session_state.thread_id}},
@@ -205,6 +236,7 @@ def decide(confirmed: bool) -> None:
         chat_model=resources.chat_model,
         repository=resources.repository,
         checkpointer=resources.checkpointer,
+        permissions=session_permissions(),
     )
     turn = chat_turn(
         graph,
