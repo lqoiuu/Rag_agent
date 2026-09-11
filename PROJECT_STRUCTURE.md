@@ -38,13 +38,17 @@ rag-agent-assistant/
 │       │   └── settings.py
 │       ├── domain/
 │       │   ├── __init__.py
+│       │   ├── citation.py
 │       │   ├── documents.py
-│       │   └── errors.py
+│       │   ├── errors.py
+│       │   └── retrieval.py
 │       ├── generation/
 │       │   ├── __init__.py
-│       │   └── minimal_qa.py
+│       │   ├── minimal_qa.py
+│       │   └── rag_answer.py
 │       ├── ingestion/
 │       │   ├── __init__.py
+│       │   ├── filters.py
 │       │   ├── loaders.py
 │       │   ├── normalize.py
 │       │   ├── pipeline.py
@@ -76,6 +80,7 @@ rag-agent-assistant/
         ├── pdf_fixtures.py
         ├── test_chroma_store.py
         ├── test_chunk_stats.py
+        ├── test_cli_answer.py
         ├── test_cli_ask.py
         ├── test_cli_chunk_report.py
         ├── test_cli_ingest.py
@@ -84,6 +89,7 @@ rag-agent-assistant/
         ├── test_fake_providers.py
         ├── test_health.py
         ├── test_ingest_pipeline.py
+        ├── test_ingestion_filters.py
         ├── test_loaders.py
         ├── test_loaders_pdf.py
         ├── test_logging.py
@@ -92,6 +98,8 @@ rag-agent-assistant/
         ├── test_provider_errors.py
         ├── test_provider_factory.py
         ├── test_qwen_adapter.py
+        ├── test_qwen_stream.py
+        ├── test_rag_answer.py
         ├── test_settings.py
         ├── test_sqlite_store.py
         └── test_splitters.py
@@ -115,7 +123,7 @@ rag-agent-assistant/
 | 文件 | 职责 | 涉及知识 |
 |---|---|---|
 | src/rag_agent/__init__.py | 声明 rag_agent Python 包并提供版本号 | 包、模块、包元数据 |
-| src/rag_agent/__main__.py | 提供 `health`、`ask`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document` 七个命令，退出码 0 成功、1 部分失败或低置信度、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
+| src/rag_agent/__main__.py | 提供 `health`、`ask`、`answer`、`search`、`chunk-report`、`ingest`、`reindex`、`delete-document` 八个命令，退出码 0 成功、1 部分失败或拒答、2 错误 | 命令行参数、进程退出码、错误到退出码的映射 |
 | src/rag_agent/health.py | 集中检查 Python、虚拟环境、依赖和核心模块导入 | 运行环境、依赖元数据、模块导入 |
 | src/rag_agent/config/__init__.py | 对外暴露配置与 Provider 组装接口 | 包的公共 API |
 | src/rag_agent/config/settings.py | 从环境变量读取配置并解析项目绝对路径，含模型名、超时、重试和检索参数 | Pydantic、环境配置、路径稳定性 |
@@ -123,15 +131,18 @@ rag-agent-assistant/
 | src/rag_agent/domain/__init__.py | 对外暴露领域模型与摄取错误 | 包的公共 API |
 | src/rag_agent/domain/documents.py | 定义 FileType、DocumentStatus、DocumentPage、SourceDocument、DocumentChunk，以及稳定文档 ID、校验值和版本派生 | 领域模型、稳定标识、内容版本 |
 | src/rag_agent/domain/errors.py | 定义八类带稳定 code 的摄取错误，含分片错误 | 错误隔离、异常设计 |
-| src/rag_agent/domain/retrieval.py | 定义 RetrievalHit、RetrievalResult 与置信判定，reason 字段解释判定依据 | 领域模型、置信判定、可解释性 |
+| src/rag_agent/domain/retrieval.py | 定义 RetrievalHit、RetrievalResult 与置信判定，reason 解释判定依据，margin 记录前两名分差供评测分析 | 领域模型、置信判定、可解释性 |
+| src/rag_agent/domain/citation.py | 定义 Citation 与摘录压缩，label 给出可读定位 | 领域模型、来源追溯 |
 | src/rag_agent/ingestion/__init__.py | 对外暴露加载、规范化、分片、统计与入库接口 | 模块边界 |
 | src/rag_agent/ingestion/normalize.py | 识别编码并规范化文本：BOM 嗅探、编码回退、换行与控制字符处理、空行折叠、幂等保证 | 字符编码、文本规范化、幂等性 |
 | src/rag_agent/ingestion/loaders.py | 把 TXT、Markdown 和 PDF 加载为 SourceDocument，批量失败隔离、重复内容标记与目录枚举 | Document Loader、错误隔离、批量一致性 |
 | src/rag_agent/ingestion/splitters.py | 标题感知与递归字符分片：按标题切 section、保留标题层级路径、计算跨页字符范围、强制分片可回溯到原文 | Text Splitter、分片参数、字符偏移、不变量校验 |
 | src/rag_agent/ingestion/stats.py | 汇总分片数量与长度分布，含最近秩分位数和直方图，供参数实验比较 | 分布统计、分位数、实验可重复性 |
-| src/rag_agent/ingestion/pipeline.py | 串起加载、分片、分批 Embedding、写向量与写元数据；未变更短路、内容变更替换旧分片、失败记录任务且保留旧版本 | 幂等性、增量更新、两存储一致性 |
+| src/rag_agent/ingestion/pipeline.py | 串起加载、分片、分批 Embedding、写向量与写元数据；未变更短路、内容变更替换旧分片、入库前过滤目录类分片、失败记录任务且保留旧版本 | 幂等性、增量更新、两存储一致性、噪声过滤 |
+| src/rag_agent/ingestion/filters.py | 用点引导线比例识别目录或索引类分片，规则确定且可关闭，供阶段 8 做 A/B | 启发式规则、检索噪声、可实验性 |
 | src/rag_agent/generation/__init__.py | 对外暴露最小问答链路接口 | 模块边界 |
 | src/rag_agent/generation/minimal_qa.py | 用 LCEL 组装 Prompt -> Model -> Parser，并返回带模型证据的结构化答案 | LCEL、Runnable 协议、结构化输出 |
+| src/rag_agent/generation/rag_answer.py | 编号上下文、依据约束提示词、引用校验、六类拒答原因；拆出 prepare/finalize 供流式复用 | Grounding、结构化输出、引用校验、幻觉来源 |
 | src/rag_agent/observability/__init__.py | 对外暴露日志配置接口 | 模块边界 |
 | src/rag_agent/observability/logging.py | 输出 JSON 结构化日志，并把 httpx 的 INFO 日志降为 WARNING | Python logging、结构化数据、异常记录 |
 | src/rag_agent/providers/__init__.py | 对外暴露协议、错误类型、真实实现和 Fake 实现 | 模块边界、公共 API |
@@ -174,6 +185,10 @@ rag-agent-assistant/
 | tests/unit/test_cli_ingest.py | ingest、reindex、delete-document 的参数校验、退出码与成功、部分失败、缺密钥分支 |
 | tests/unit/test_retriever.py | 精确内容命中排第一、分数降序与排名、top-k 默认与覆盖、阈值高低分支、空索引、来源过滤、非法配置与调用参数 |
 | tests/unit/test_cli_search.py | search 的用法错误、命中输出、低置信度退出码 1、空索引与阈值越界 |
+| tests/unit/test_rag_answer.py | 引用校验、编造编号被丢弃与上报、六类拒答原因、上下文预算、提示词与 Provider 异常传播 |
+| tests/unit/test_cli_answer.py | answer 的引用输出、拒答退出码、空索引不调用模型、`--stream` 先流后结果与缺密钥 |
+| tests/unit/test_qwen_stream.py | SSE 增量顺序、噪声与 `[DONE]` 忽略、状态码分类、首个增量后不重试、Fake 分片 |
+| tests/unit/test_ingestion_filters.py | 目录页识别、正常段落与标准表格不被误删、比例与最小行数可配置 |
 | tests/integration/test_qwen_live.py | 真实模型联网调用与 Embedding 维度一致性，默认跳过 |
 
 ## 稳定设计文档
@@ -199,6 +214,8 @@ rag-agent-assistant/
 阶段 5（向量化、持久化与增量索引）已完成并通过验收，含真实说明书入库验证。
 
 阶段 6（检索器 V1 与可解释结果）已完成并通过验收，含真实检索实测与一次重要的负面发现。
+
+阶段 7（RAG 回答与来源引用）已完成并通过验收，含真实带引用回答、真实 Token 流式输出，以及阶段 6 遗留问题的处置。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -290,6 +307,33 @@ rag-agent-assistant/
 - 五次运行的分数集中在 0.42 至 0.63 之间，说明 `text-embedding-v4` 的余弦相似度基线整体偏高，这解释了发现一。
 - 待阶段 8 用评测集回答的问题：是否需要重排、是否过滤或降权目录类分片、阈值取多少或改用相对判据。三条查询不是评测，只是第一个数据点，因此本阶段刻意未调整任何默认参数。
 
+阶段 7 证据（2026-09-10 / 09-11 实际执行）：
+
+- 代码提交：`1940c9d`。
+- `ruff check`：All checks passed；`ruff format --check`：63 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 33 source files。
+- `pytest`：229 passed, 2 skipped（在 DSH 沙箱内执行）；另有 18 个使用 `tmp_path` 的用例受沙箱限制，由学习者在本地确认，两处合计 247 passed, 2 skipped。
+- 真实带引用回答（学习者在本地执行）：
+
+  | 提问 | 结果 | 引用 |
+  |---|---|---|
+  | 制造商地址在哪里 | answered，`status` 为 `ok` | `[1]` 第 32 页，答案即「苏州市吴中区郭巷街道淞苇路 518 号」 |
+  | 产品型号是什么，售后电话是多少 | answered | `[2]` 第 27 页，答案「DBX23 / 400-886-8888」 |
+  | 这台扫地机器人明年会涨价吗 | **refused**，`refusal_cause` 为 `model_insufficient` | 无，理由指出所有资料均未涉及价格与定价政策 |
+
+- 第三问正是阶段 6 阈值失效的同一道题：检索 `confident` 仍为 true（best 0.5897），但回答层正确拒答。**这是「依据约束 + 引用校验」优于分数阈值的直接证据。**
+- 第二问还暴露了一个有意思的现象：检索 rank 1 是目录分片（0.5664），真正含型号与电话的分片排第 2（0.5617），但模型**引用了 rank 2**，答案准确——生成阶段部分补偿了检索排序缺陷。
+- 真实 Token 流式输出（本机实测）：13 个增量，首个增量 1555 ms 到达、末个 2791 ms、总计 2813 ms，说明是真实增量而非一次性缓冲；流式结果与一次性调用得到同样的引用（第 32 页）。
+- 已知偏差：第一问的答案正文里没有 `[1]` 行内标注，编号只出现在结构化的 `citations` 字段中。这满足计划里「结构化答案 + 引用列表」的验收，但提示词第 2 条要求的行内标注并未被强制；是否补强制校验留给阶段 8 作为评测检查项。
+
+阶段 6 遗留问题的处置（2026-09-11 实际执行）：
+
+- **目录类分片：采用确定性过滤规则。** 新增 `ingestion/filters.py`，以「点引导线结尾带页码的行占比」识别目录或索引页（默认比例 0.3、最少 3 行），入库前过滤，并可用 `--keep-index-chunks` 关闭，供阶段 8 做 A/B。选择过滤而非降权的理由：清单页本身不含可回答的事实，且规则不需要人为设定权重。
+- 实测效果：手册 A 由 **37 个分片降为 34 个**，恰好丢掉此前定位到的三个目录分片；对查询「使用产品前需要先做什么」，rank 1 由目录分片变为真正含答案的分片，**top1 与 top2 的间隔由 0.0011 提升到 0.0375**（约 34 倍）。这是可测量、可复现的改善，而不是主观判断。
+- 过滤后的回答链路复核：同一问题 `answer` 仍为 `answered`，引用第 2 页（此前被目录页挤到第二名的分片），耗时 4253 ms。
+- **重排：暂不引入。** 理由是没有评测集就无法证明重排带来收益，而重排会引入额外模型调用成本；阶段 8 用 Recall@K 与 MRR 判定是否需要。
+- **阈值：角色重新定位为成本控制，而非正确性判定。** `is_confident` 的文档字符串已写明这一点，`RetrievalResult.margin` 新增为结构化字段，供阶段 8 分析相对信号是否有用（阶段 6 已证明它在这三条查询上不可分，因此本阶段不据此改判）。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`，并遗留 `pytest-cache-files-*` 或 `.pytest_tmp` 目录。这是沙箱副作用；在普通终端运行 pytest 不受影响。
@@ -324,23 +368,30 @@ rag-agent-assistant/
 - 检索可按来源过滤，并支持在命令行覆盖 top_k、threshold 与 source。
 - 置信判定与判定依据说明（`confident` 与 `reason`），低置信度以退出码 1 表达而非崩溃。
 - `rag-agent search "问题"` 检索调试命令，输出可解释的命中列表。
+- 依据检索结果生成带引用校验的答案：只能依据编号资料作答，编造的引用会被丢弃并上报，没有可核验引用时整条回答被拒。
+- 六类机器可读的拒答原因，便于统计拒答正确率。
+- 检索为空时不调用聊天模型，直接拒答并省下一次请求。
+- `rag-agent answer "问题"` 命令行问答，支持 `--stream` 真实 Token 增量输出。
+- Provider 层的 SSE 流式解析，首个增量之后不再重试，避免重复输出。
+- 入库前过滤目录或索引类分片，规则确定、可关闭。
 
 ## 尚未实现
 
-- 依据检索结果生成带引用的答案，以及答案侧的拒答（阶段 7）。
 - 用户、设备、订单和工单工具。
 - LangGraph 路由、Checkpoint 和人工确认。
 - RAG 离线评测、Streamlit 界面、安全降级和 Docker 交付。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
-- 重排、目录类分片降权与阈值校准，需等阶段 8 的评测集给出依据。
+- 重排与阈值校准，需等阶段 8 的评测集给出依据。
 
 ## 最近结构变化
 
-本次同步（阶段 6）相对上一次的主要变化：
+本次同步（阶段 7）相对上一次的主要变化：
 
-- 新增 `src/rag_agent/domain/retrieval.py`，承载检索命中与置信判定模型。
-- 新增 `src/rag_agent/retrieval/`，承载检索引擎。
-- `src/rag_agent/vectorstore/chroma.py` 的 `query` 改为返回重构后的 `DocumentChunk`，并支持按来源过滤。
-- `src/rag_agent/__main__.py` 新增 `search` 命令与 `--top-k`、`--threshold`、`--source` 参数。
-- `src/rag_agent/config/settings.py` 与 `.env.example` 新增检索参数。
-- `tests/unit/` 新增两个测试文件。
+- 新增 `src/rag_agent/domain/citation.py`，承载引用模型。
+- 新增 `src/rag_agent/generation/rag_answer.py`，承载带引用校验的 RAG 回答。
+- 新增 `src/rag_agent/ingestion/filters.py`，承载目录类分片过滤规则。
+- `providers/base.py`、`qwen.py`、`fake.py` 增加 `stream_chat` 与 SSE 解析。
+- `domain/retrieval.py` 增加 `margin` 字段。
+- `ingestion/pipeline.py` 增加入库前过滤与 `dropped_chunks` 统计。
+- `src/rag_agent/__main__.py` 新增 `answer` 命令与 `--stream`、`--keep-index-chunks`。
+- `tests/unit/` 新增四个测试文件。
