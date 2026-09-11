@@ -1,7 +1,6 @@
 # 项目结构与文件职责
 
 最后同步：2026-09-11
-
 ## 项目边界
 
 RAG_AGENT_PROJECT_PLAN.md 位于外层 Rag_agent 目录，负责保存整个项目的阶段路线和协作规则。
@@ -102,6 +101,15 @@ rag-agent-assistant/
 │       │   ├── business.py
 │       │   ├── errors.py
 │       │   └── models.py
+│       ├── ui/
+│       │   ├── __init__.py
+│       │   ├── app.py                  # 界面入口与路由；页面本身在 app_pages/
+│       │   ├── services.py             # 进程级共享资源与路径助手
+│       │   └── app_pages/
+│       │       ├── __init__.py
+│       │       ├── chat.py
+│       │       ├── knowledge.py
+│       │       └── search.py
 │       └── vectorstore/
 │           ├── __init__.py
 │           └── chroma.py
@@ -151,7 +159,9 @@ rag-agent-assistant/
         ├── test_qwen_adapter.py
         ├── test_qwen_stream.py
         ├── test_rag_answer.py
+        ├── test_rag_answer_stream_context.py
         ├── test_settings.py
+        ├── test_ui_app.py
         ├── test_sqlite_store.py
         └── test_splitters.py
 ~~~
@@ -212,16 +222,22 @@ rag-agent-assistant/
 | src/rag_agent/providers/qwen.py | 通过 httpx 调用 DashScope OpenAI 兼容端点，实现超时、指数退避重试、状态码分类、耗时与 token 记录 | HTTP 客户端、重试策略、密钥外置 |
 | src/rag_agent/providers/fake.py | 提供脚本化 FakeChatModel 和确定性 FakeEmbeddingModel | 测试替身、确定性测试 |
 | src/rag_agent/storage/__init__.py | 对外暴露元数据仓储接口 | 模块边界 |
-| src/rag_agent/storage/sqlite.py | SQLite 元数据存储：documents、document_versions、ingestion_jobs 三张表，按来源 upsert、查询、删除并记录任务 | sqlite3、事务、唯一约束、版本历史 |
+| src/rag_agent/storage/sqlite.py | SQLite 元数据存储：documents、document_versions、ingestion_jobs 三张表，按来源 upsert、查询、删除并记录任务；连接禁用线程绑定并用可重入锁串行化事务，文件库启用 WAL | sqlite3、事务、唯一约束、版本历史、线程安全 |
 | src/rag_agent/vectorstore/__init__.py | 对外暴露向量存储与匹配结果接口 | 模块边界 |
 | src/rag_agent/vectorstore/chroma.py | Chroma 封装：按稳定 chunk ID 幂等 upsert、按文档取 ID 与内容、删除、向量查询并重建 DocumentChunk，支持按来源过滤 | 向量维度、距离度量、幂等写入、元数据回读 |
-| src/rag_agent/storage/business.py | 模拟用户、设备、订单、工单四张表与仓储接口，按 seed 文件幂等灌入，保修到期日按整数月计算 | SQLite、确定性数据、日期算术 |
+| src/rag_agent/storage/business.py | 模拟用户、设备、订单、工单四张表与仓储接口，按 seed 文件幂等灌入，保修到期日按整数月计算；连接与事务处理同元数据存储 | SQLite、确定性数据、日期算术、线程安全 |
 | src/rag_agent/tools/__init__.py | 对外暴露工具契约、错误类型与四个工具函数 | 模块边界 |
 | src/rag_agent/tools/models.py | Pydantic 参数与结果模型，含工单草稿、确认标记与派生幂等键 | Schema 校验、幂等键设计 |
 | src/rag_agent/tools/errors.py | 工具错误分类：not_found、permission_denied、invalid_argument、confirmation_required、conflict、unavailable | 工具边界、错误语义 |
 | src/rag_agent/tools/business.py | 四个契约化工具：用户、设备、订单查询与工单创建；失败转成结构化结果而不是字符串 | Function Calling 契约、权限、幂等性与读写风险 |
 | src/rag_agent/retrieval/__init__.py | 对外暴露检索器接口 | 模块边界 |
 | src/rag_agent/retrieval/retriever.py | 查询向量化、Top-K、来源过滤与阈值判定；单次调用可覆盖 top_k、threshold、source | 语义相似度、Top-K、阈值取舍 |
+| src/rag_agent/ui/__init__.py | 对外暴露资源容器与资源获取接口 | 模块边界 |
+| src/rag_agent/ui/app.py | 界面入口与路由：三页 `st.Page` 导航、会话状态初始化、侧边栏身份与会话选择、把「界面消息」与「Checkpoint 状态」的差别写在界面上 | Streamlit 多页、`st.navigation`、session state 与资源缓存的职责划分 |
+| src/rag_agent/ui/services.py | 进程级共享资源容器（向量库、模型、三个 SQLite 句柄、检索器），用 `st.cache_resource` 带 TTL 缓存并在释放时关闭句柄 | 缓存生命周期、依赖注入 |
+| src/rag_agent/ui/app_pages/chat.py | 对话页：流式生成状态、引用卡片、工具调用步骤、待确认写操作的确认/取消按钮，并区分本轮回合与整条会话的轨迹 | 生成器流式、`st.chat_message`、写操作门禁的界面表达 |
+| src/rag_agent/ui/app_pages/knowledge.py | 知识库页：上传落盘后入库、文档列表（分片与向量数）、删除、重建索引；每次 rerun 重读 SQLite，提交结果用一次性会话值传递 | 幂等入库、rerun 去重、文件上传 |
+| src/rag_agent/ui/app_pages/search.py | 检索调试页：命中表、相似度、前两名分差、置信判定依据，并把「阈值不可分」的实测结论写在页面上 | 检索可解释性、调试界面 |
 | data/eval/qa_set.jsonl | 49 条评测用例（43 可回答、6 不可回答），含预期页码与参考答案 | 评测集设计、标注一致性 |
 | data/eval/reports/ | 每次评测生成的 Markdown 与 JSON 报告 | 基线记录、可复现性 |
 | src/rag_agent/evaluation/dataset.py | 加载并校验评测集：必填字段、重复 ID、可回答与页码的一致性 | 数据契约、校验 |
@@ -272,6 +288,8 @@ rag-agent-assistant/
 | tests/unit/test_tools.py | 四个工具的契约、掩码字段、权限拒绝、确认要求、幂等重复调用、Schema 违规与存储故障可重试 |
 | tests/unit/test_cli_tool.py | tool list 契约输出、查询成功、权限失败退出码 1、未确认拒写、重复创建返回同一工单、参数错误退出码 2 |
 | tests/unit/test_rag_answer.py | 引用校验、编造编号被丢弃与上报、六类拒答原因、上下文预算、提示词与 Provider 异常传播 |
+| tests/unit/test_rag_answer_stream_context.py | 流式与非流式构造同一条提示词、第一轮提示词保持不变、流式增量顺序与拼接结果 |
+| tests/unit/test_ui_app.py | 用 Streamlit 官方 AppTest 无浏览器驱动界面（注入假模型，测试内不联网络）：入口与三页均无异常渲染、空索引有提示、侧边栏新建会话、设备问题走业务工具、报修暂停且取消不写库、确认只建一张工单、上传真的落盘并入库、检索页给出判定依据、流式开关走知识路径 |
 | tests/unit/test_cli_answer.py | answer 的引用输出、拒答退出码、空索引不调用模型、`--stream` 先流后结果与缺密钥 |
 | tests/unit/test_qwen_stream.py | SSE 增量顺序、噪声与 `[DONE]` 忽略、状态码分类、首个增量后不重试、Fake 分片 |
 | tests/unit/test_ingestion_filters.py | 目录页识别、正常段落与标准表格不被误删、比例与最小行数可配置 |
@@ -291,6 +309,7 @@ rag-agent-assistant/
 | docs/adr/0001-technology-stack.md | 技术选型、备选方案和决策后果 |
 | docs/adr/0002-provider-layer.md | 模型接入方式、同步优先取舍和错误分类决策 |
 | docs/adr/0003-conversation-memory.md | 会话持久化用自实现 SQLite Checkpointer、确认用节点内 Interrupt、窗口与长期偏好的边界 |
+| docs/adr/0004-streamlit-ui.md | 界面不承载业务规则、状态分两层、流式与引用校验并存、本轮回合与累积视图的区分 |
 
 ## 当前阶段
 
@@ -315,6 +334,8 @@ rag-agent-assistant/
 阶段 10（LangGraph 状态与确定性工作流）已完成并通过验收，含四类意图的真实路由验证与「模型无法跳过确认节点」的结构性证明。
 
 阶段 11（多轮记忆、Checkpoint 与人工确认）已完成并通过验收，含真实模型的跨进程续聊、跨用户隔离与取消不写库验证。
+
+阶段 12（Streamlit 产品界面）已完成并通过验收，含真实服务进程启动、三页无异常渲染与界面内的确认门禁验证。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -541,9 +562,38 @@ rag-agent-assistant/
 - 真实模型复验（4 个场景）：有历史的追问 → `device`、答出 `2028-01-10`、轨迹含改判记录；反例「那它的耗电量是多少」→ 仍为 `knowledge`、无改判；冷启动同一句 → 行为不变，且因窗口为空无法解析设备号而不触发改判；「帮我把 D2001 报修」→ 仍为 `ticket` 并停在待确认。
 - 依赖证明：把规则关闭后重新跑同一场景，结果回到 `knowledge` 拒答，说明这条修复确实由该规则产生。
 
+阶段 12 证据（2026-09-11 实际执行）：
+
+- 代码提交：`e2ca5e9`（阶段 12 功能与测试）。
+- 依赖：新增 `streamlit 1.63.0`（`uv add streamlit`），其依赖 pandas 3.0.5、pyarrow 25.0.1 在 Python 3.13 下均有官方 cp313 wheel。
+- `ruff check`：All checks passed；`ruff format --check`：122 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 61 source files。
+- `pytest`：**440 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- 真实服务启动：`python -m streamlit run src/rag_agent/ui/app.py --server.port=8555`，`GET /` 返回 **HTTP 200**，`GET /_stcore/health` 返回 **200 ok**。
+- 三页渲染验证：用 Streamlit 官方 `st.testing.v1.AppTest` 逐页执行（入口 + `switch_page` 到三个页面），四者 `at.exception` 均为空。
+- 界面内行为验证（注入假模型，不联网络）：
+
+  | 场景 | 结果 |
+  |---|---|
+  | 对话页提问「D2002 还在保修吗」 | 调用 `device.lookup`，答出「2028-01-10」 |
+  | 报修请求 | 出现待确认，`pending_action.action` 为 `ticket.create`，工单数仍为 0 |
+  | 点击「取消」 | `pending_action` 清空，**工单数仍为 0** |
+  | 点击「确认创建」 | 工单数变为 1 |
+  | 知识库页上传 Markdown | 文件写入 `data/raw/`，元数据中出现该来源 |
+  | 检索页查询已有分片 | 显示最高相似度、前两名分差与判定依据 |
+  | 打开流式开关提问 | 走知识路径（`intent_source=stream`），且不写检查点 |
+
+**实现中发现并已修复的三个真问题**：
+
+1. **`MetadataStore` 与 `BusinessRepository` 同样缺少跨线程许可**：`AppTest` 每个页面在不同线程执行，立刻复现 `SQLite objects created in a thread can only be used in that same thread`。两者现与 Checkpointer 一致：`check_same_thread=False` + 可重入锁串行化事务，文件库启用 WAL，使同库的另外两个连接可以在写入期间读取。
+2. **检索页在只有一个命中时崩溃**：此时 `margin` 为 `None`，而页面用 `f"{margin:.4f}"` 格式化，抛 `TypeError`。现显示为「不适用（只有一个命中）」。
+3. **侧边栏把会话编号同时用作 `session_state` 键与 `text_input` 的 key**：点击「新建会话」时赋值触发 `StreamlitWidgetAlreadyInstantiatedError`。现改为输入框使用独立键，并通过 `on_change` 回调同步，符合 Streamlit 对「渲染后不得改写控件键」的要求。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`。**阶段 11 已用 `tests/conftest.py` 覆盖内置 `tmp_path`，把每个用例的临时目录放到项目内的 `.pytest_tmp/`（已被 .gitignore 忽略）**，因此沙箱内不再出现该错误；`.pytest_tmp/` 与 `pytest-cache-files-*` 仍属沙箱副作用，可安全删除。
+- 沙箱内 uv 无法写入用户级缓存（`AppData\Local\uv\cache`），需设置 `UV_CACHE_DIR` 指向项目内目录；该目录已在 `.gitignore` 中忽略。
+- 用 PowerShell 的 `Get-Content` / `Set-Content` 改写 `.py` 文件会破坏非 ASCII 字符（本项目已实际踩到一次：em dash 变成乱码）。改动源码请使用编辑工具，而不是 PowerShell 文本往返。
 
 ## 当前已实现能力
 
@@ -603,20 +653,38 @@ rag-agent-assistant/
 - 短期记忆与长期记忆分离：消息窗口只影响 Prompt，长期偏好按 `user_id` 存在 `user_preferences` 表，清除会话不会删除偏好。
 - `rag-agent thread list|clear|preferences`：列出会话（含消息数与检查点数）、清除指定会话并返回删除数量、查看或写入长期偏好。
 - 会话消息在每轮结束后通过 `update_state` 追加，使下一轮能读取上一轮的用户消息与助手回复。
+- Streamlit 三页界面：对话、知识库管理、检索调试，用 `st.navigation` 组织，可通过 `uv run streamlit run src/rag_agent/ui/app.py` 启动。
+- 对话页支持流式生成（带会话记忆与引用校验）、引用卡片、工具调用步骤，以及待确认写操作的确认/取消按钮。
+- 界面明确区分「本次浏览器会话显示的消息」与「Checkpoint 中持久化的会话状态」，并在侧边栏同时给出索引分片数与文档数。
+- 界面复用 CLI 的同一批入口（`chat_turn`/`stream_chat_turn`/`ingest_path`/`sync_index`/`remove_document`），因此不能绕过写操作门禁。
+- 知识库页支持上传、查看、删除与重建索引，且每次 rerun 重新读取真实状态，提交结果用一次性会话值传递以避免重复入库。
+- 流式路径与一次性路径构造同一条提示词（最近对话 + 长期偏好 + 编号资料），由测试固定。
 
 ## 尚未实现
 
-- Streamlit 界面、安全与可观测性降级、Docker 交付（阶段 12、13、14）。
-- 由用户文本「确认/取消」触发恢复：当前必须用 `--confirm` / `--cancel` 显式表达，以避免让模型决定是否写库。
+- 安全与可观测性降级（阶段 13）、Docker 与最终交付（阶段 14）。
+- 界面身份认证：侧边栏的「用户编号」只是演示标识，任何访问者都能填任意编号。
+- 由用户文本「确认/取消」触发恢复：当前必须用 `--confirm` / `--cancel` 或界面按钮显式表达，以避免让模型决定是否写库。
 - 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
 - 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
 - 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
 - 表格序号与上下文编号混淆导致的引用越界（6 条），需要更强的格式约束或校验提示。
 - 角色与权限表：当前只有「属主」一条规则，模拟定位下够用但不足以表达更细的授权。
+- 界面自动化覆盖的边界：`AppTest` 无法触发图表/表格的**选择**事件，也无法验证自定义组件 JavaScript 与最终视觉效果，这部分仍需人工查看页面。
 
 ## 最近结构变化
 
-本次同步（阶段 11）相对上一次的主要变化：
+本次同步（阶段 12）相对上一次的主要变化：
+
+- 新增 `src/rag_agent/ui/`：`app.py` 入口与路由、`services.py` 共享资源、`app_pages/` 三个页面脚本。
+- `pyproject.toml` 新增 `streamlit>=1.57,<2`；`uv.lock` 同步（streamlit 1.63.0）。
+- `src/rag_agent/agent/graph.py`：新增 `stream_chat_turn` 流式入口（带会话记忆与引用校验），`ChatTurn` 新增 `turn_trace` 与 `turn_tool_results` 区分本轮回合与整条会话。
+- `src/rag_agent/generation/rag_answer.py`：`stream_raw_answer` 显式接收 `conversation_context`，流式路径不再丢失记忆。
+- `src/rag_agent/storage/sqlite.py`、`src/rag_agent/storage/business.py`：连接改为 `check_same_thread=False` + 可重入锁，文件库启用 WAL。
+- `.gitignore` 新增 `.uv-cache/`（沙箱内 uv 缓存落在项目内时忽略）。
+- `tests/unit/` 新增 `test_ui_app.py` 与 `test_rag_answer_stream_context.py`。
+
+上一次同步（阶段 11）的主要变化：
 
 - 新增 `src/rag_agent/memory/`：`schema.py` 保存建表语句，`checkpoints.py` 是自实现的 SQLite Checkpointer，`conversation.py` 负责会话归属、消息窗口与长期偏好。
 - `src/rag_agent/agent/nodes.py`：创建工单节点以 `interrupt()` 作为第一条语句，暂停早于任何工具调用；字段抽取改读整个 state 以使用最近对话。

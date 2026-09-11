@@ -220,6 +220,28 @@ flowchart TD
            └─ 完整消息历史 ──> Checkpoint（不随窗口裁剪）
 ```
 
+## 7.1 界面层的位置
+
+```text
+Streamlit 页面（streamlit run src/rag_agent/ui/app.py）
+   │  只做：展示、收集输入、触发动作
+   v
+既有入口（chat_turn / stream_chat_turn / ingest_path / sync_index / remove_document）
+   v
+业务规则与副作用（agent/、tools/、memory/、ingestion/）
+```
+
+界面不实现任何业务规则：意图路由、确认门禁、幂等键与引用校验全部留在原有模块，因此 CLI 与界面走的是同一套规则，界面无法绕过写操作门禁。
+
+界面状态分两层，且必须在界面上区分：
+
+| 层 | 存放位置 | 生命周期 |
+|---|---|---|
+| 界面显示的消息列表 | `st.session_state` | 当前浏览器会话；刷新即丢 |
+| 会话真实状态 | SQLite Checkpoint（按 `thread_id`） | 跨刷新、跨进程重启 |
+
+进程级共享对象（向量库、模型客户端、SQLite 句柄、检索器）由 `@st.cache_resource` 持有，不放在 `st.session_state`，也不放在模块级可变变量里。
+
 ## 8. 信任边界与安全控制
 
 ```text
