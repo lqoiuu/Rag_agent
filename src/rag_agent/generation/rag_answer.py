@@ -16,7 +16,7 @@ import json
 import logging
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -280,6 +280,7 @@ def stream_raw_answer(
     prepared: PreparedAnswer,
     chat_model: ChatModel,
     *,
+    conversation_context: str | None = None,
     temperature: float = 0.0,
 ) -> Iterator[str]:
     """Yield the raw model output for a prepared answer, delta by delta.
@@ -287,8 +288,14 @@ def stream_raw_answer(
     The text is intentionally *raw*: the grounded answer format is JSON, so the
     caller accumulates the deltas and passes them to :func:`finalize_answer`
     afterwards instead of showing unvalidated content.
+
+    ``conversation_context`` is an explicit parameter rather than something the caller
+    has to remember to put on ``prepared`` first. It used to be dropped here entirely,
+    which made every streaming caller silently stateless.
     """
 
+    if conversation_context is not None and conversation_context != prepared.conversation_context:
+        prepared = replace(prepared, conversation_context=conversation_context)
     yield from chat_model.stream_chat(build_messages(prepared), temperature=temperature)
 
 

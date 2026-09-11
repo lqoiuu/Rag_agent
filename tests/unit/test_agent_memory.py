@@ -265,3 +265,46 @@ def test_turn_reports_its_checkpoint_growth(conversations: Any) -> None:
     assert turn.checkpoints_before == 0
     assert turn.checkpoints_after > 0
     assert turn.as_dict()["memory"]["checkpoints_after"] == turn.checkpoints_after
+
+
+def test_a_turn_reports_only_its_own_writes(conversations: Any) -> None:
+    """``run.trace`` accumulates over the thread; the per-turn slice must not.
+
+    A UI that showed the accumulated trace would claim the current turn retried every
+    step of the whole conversation.
+    """
+
+    graph, _model, _repository = conversations(intent_reply("device"), intent_reply("device"))
+    first = chat_turn(graph, "D2002 还在保修吗", thread_id="T1", user_id="U1001")
+
+    second = chat_turn(graph, "D2001 还在保修吗", thread_id="T1", user_id="U1001")
+
+    assert first.turn_trace == ("classify:device", "device:ok")
+    # 累积视图保留整条线程
+    assert second.run.trace[:2] == ("classify:device", "device:ok")
+    assert len(second.run.trace) == 4
+    # 本轮视图只有本轮
+    assert second.turn_trace == ("classify:device", "device:ok")
+    assert len(second.turn_tool_results) == 2  # 本轮 device.lookup + order.lookup
+    assert len(second.run.tool_results) == 4  # 整条线程累积
+
+
+def test_a_resumed_turn_reports_only_the_resume(conversations: Any) -> None:
+    """On resume the accumulated trace comes from the snapshot, not a fresh run."""
+
+    graph, _model, _repository = conversations(
+        intent_reply("ticket"),
+        extract_reply(device_id="D2001", issue="主刷一直卡住", contact="138****0001"),
+    )
+    paused = chat_turn(
+        graph,
+        "帮我把 D2001 报修，主刷一直卡住，联系我 138****0001",
+        thread_id="T1",
+        user_id="U1001",
+    )
+    assert "ticket_create" not in " ".join(paused.run.trace)
+
+    resumed = chat_turn(graph, "", thread_id="T1", resume={"confirmed": True})
+
+    assert resumed.turn_trace == ("ticket_create:created=True",)
+    assert len(resumed.run.trace) > len(resumed.turn_trace)

@@ -13,6 +13,9 @@ htmlcov/
 .venv/
 .venv_old/
 
+# uv cache (kept inside the project when the user-level cache is not writable)
+.uv-cache/
+
 # Secrets and local configuration
 .env
 !.env.example

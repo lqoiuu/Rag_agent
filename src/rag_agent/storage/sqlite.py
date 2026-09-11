@@ -7,6 +7,7 @@ returns domain records, so the pipeline never sees raw rows.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -120,12 +121,21 @@ class MetadataStore:
     """Typed access to the project metadata database.
 
     ``":memory:"`` is accepted as a path so tests can run without a file.
+
+    The connection is opened with ``check_same_thread=False`` and guarded by a
+    re-entrant lock: a Streamlit rerun executes in a worker thread that differs from the
+    one that built the store, and ``data/rag_agent.sqlite3`` is shared with the
+    checkpoint and business tables, so writes from two connections must not overlap.
+    WAL mode lets those other connections read while this one writes.
     """
 
     def __init__(self, path: Path | str) -> None:
         self._path = str(path)
-        self._connection = sqlite3.connect(self._path)
+        self._lock = threading.RLock()
+        self._connection = sqlite3.connect(self._path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        if self._path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode=WAL")
         self.initialize()
 
     @property
@@ -135,12 +145,13 @@ class MetadataStore:
     def initialize(self) -> None:
         """Create the schema when it is missing; safe to call repeatedly."""
 
-        with self._connection:
+        with self._lock, self._connection:
             for statement in SCHEMA:
                 self._connection.execute(statement)
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def __enter__(self) -> MetadataStore:
         return self
@@ -161,7 +172,7 @@ class MetadataStore:
     def save_document(self, document: StoredDocument) -> None:
         """Insert or replace the current state and record the version."""
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT INTO documents (
@@ -214,7 +225,7 @@ class MetadataStore:
         existing = self.get_document(source)
         if existing is None:
             return None
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute("DELETE FROM documents WHERE source = ?", (source,))
             self._connection.execute(
                 "DELETE FROM document_versions WHERE document_id = ?", (existing.document_id,)
@@ -233,7 +244,7 @@ class MetadataStore:
         return tuple(_version_from_row(row) for row in rows)
 
     def record_job(self, job: IngestionJob) -> None:
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT OR REPLACE INTO ingestion_jobs (

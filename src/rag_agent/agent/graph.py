@@ -17,6 +17,8 @@ rather than a change to the edge set.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -34,6 +36,13 @@ from rag_agent.agent.state import (
     STATUS_TICKET_CANCELLED,
     STATUS_TICKET_CREATED,
     AgentState,
+)
+from rag_agent.generation.rag_answer import (
+    DEFAULT_MAX_CONTEXT_CHARS,
+    RagAnswer,
+    finalize_answer,
+    prepare_answer,
+    stream_raw_answer,
 )
 from rag_agent.memory.conversation import (
     DEFAULT_WINDOW_SIZE,
@@ -100,8 +109,24 @@ class AgentRun:
 
 
 @dataclass(frozen=True, slots=True)
+class _Contribution:
+    """Channel lengths captured before a turn, used to slice out that turn's writes."""
+
+    trace_before: int
+    tools_before: int
+
+
+@dataclass(frozen=True, slots=True)
 class ChatTurn:
-    """One turn of a stored conversation, including the memory it used."""
+    """One turn of a stored conversation, including the memory it used.
+
+    ``tool_results`` and ``trace`` on ``run`` are **accumulated over the whole thread**,
+    because that is what the checkpointer stores. Callers that show activity — the CLI's
+    reader and the UI alike — need "what happened in *this* turn?" separately, which is
+    what :attr:`turn_trace` and :attr:`turn_tool_results` provide: they are computed from
+    the channel lengths captured before and after the invoke, so a resumed turn reports
+    only what the resume actually did.
+    """
 
     thread_id: str
     run: AgentRun
@@ -110,6 +135,7 @@ class ChatTurn:
     pending_action: dict[str, Any] | None
     checkpoints_before: int
     checkpoints_after: int
+    contribution: _Contribution | None = None
 
     @property
     def status(self) -> str:
@@ -124,6 +150,22 @@ class ChatTurn:
     @property
     def answered(self) -> bool:
         return self.run.answered
+
+    @property
+    def turn_trace(self) -> tuple[str, ...]:
+        """Only the trace entries this turn added."""
+
+        if self.contribution is None:
+            return self.run.trace
+        return self.run.trace[self.contribution.trace_before :]
+
+    @property
+    def turn_tool_results(self) -> tuple[dict[str, Any], ...]:
+        """Only the tool results this turn added."""
+
+        if self.contribution is None:
+            return self.run.tool_results
+        return self.run.tool_results[self.contribution.tools_before :]
 
     def as_state(self, *, user_id: str | None = None, question: str = "") -> dict[str, object]:
         """State to persist as a conversation message after this turn."""
@@ -304,6 +346,7 @@ def chat_turn(
 
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}
     checkpoints_before = _count_checkpoints(graph, thread_id)
+    contribution_before = _capture_contribution(graph, config)
 
     if resume is None:
         history = _history(graph, config)
@@ -333,12 +376,130 @@ def chat_turn(
         pending_action=_pending_action(graph, config, result),
         checkpoints_before=checkpoints_before,
         checkpoints_after=_count_checkpoints(graph, thread_id),
+        contribution=contribution_before,
+    )
+
+
+def _capture_contribution(graph: Any, config: dict[str, Any]) -> _Contribution:
+    """Record how much accumulated output already existed before this turn.
+
+    Read from the checkpoint rather than from the arguments, so it is correct on the
+    resume path too, where the accumulated trace comes back with the restored state
+    instead of from a fresh initial state.
+    """
+
+    snapshot = graph.get_state(config)
+    values = snapshot.values if snapshot and snapshot.values else {}
+    trace = values.get("trace") or []
+    tools = values.get("tool_results") or []
+    return _Contribution(
+        trace_before=len(trace) if isinstance(trace, list) else 0,
+        tools_before=len(tools) if isinstance(tools, list) else 0,
     )
 
 
 def _count_checkpoints(graph: Any, thread_id: str) -> int:
     config = {"configurable": {"thread_id": thread_id}}
     return sum(1 for _ in graph.get_state_history(config))
+
+
+def stream_chat_turn(
+    graph: Any,
+    question: str,
+    *,
+    retriever: Retriever,
+    chat_model: ChatModel,
+    thread_id: str,
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    preferences: dict[str, str] | None = None,
+    max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+    temperature: float = 0.0,
+) -> Iterator[tuple[str, ChatTurn | None]]:
+    """Run a knowledge turn with the thread's memory, streaming as it goes.
+
+    ``chat_turn`` has to run the whole graph before it can report anything, which is
+    fine for a CLI but wrong for a UI: the user would watch nothing happen. This entry
+    point builds the *same* prompt — conversation window plus preferences plus numbered
+    evidence, validated by the same citation checks — and yields the raw deltas while
+    they arrive, then yields the finished :class:`ChatTurn` exactly once.
+
+    The contract is "zero or more chunks, then exactly one turn", so a caller can forward
+    the chunks to a streaming widget and still display the validated result. That is what
+    makes streaming and citation validation compatible rather than a trade-off.
+
+    ``retriever`` and ``chat_model`` are passed explicitly instead of being recovered
+    from the compiled graph, so nothing here depends on LangGraph's node internals. The
+    model output is the grounded JSON, so chunks exist for progress display only: callers
+    render ``turn.run.answer``, never the raw stream.
+    """
+
+    preferences = preferences or {}
+    config = {"configurable": {"thread_id": thread_id}}
+    window = ConversationWindow(
+        messages=trim_messages(_history(graph, config), window_size=window_size)
+    )
+    prompt_context = render_prompt_context(window, preferences)
+    checkpoints_before = _count_checkpoints(graph, thread_id)
+
+    prepared = prepare_answer(question, retriever=retriever, max_context_chars=max_context_chars)
+    if prepared.refusal is not None:
+        yield "", _stream_turn(thread_id, window, preferences, prepared.refusal, checkpoints_before)
+        return
+
+    started = time.perf_counter()
+    deltas: list[str] = []
+    for delta in stream_raw_answer(
+        prepared,
+        chat_model,
+        conversation_context=prompt_context,
+        temperature=temperature,
+    ):
+        deltas.append(delta)
+        yield delta, None
+
+    answer = finalize_answer(
+        prepared,
+        "".join(deltas),
+        model=chat_model.model_name,
+        latency_ms=(time.perf_counter() - started) * 1000.0,
+    )
+    yield "", _stream_turn(thread_id, window, preferences, answer, checkpoints_before)
+
+
+def _stream_turn(
+    thread_id: str,
+    window: ConversationWindow,
+    preferences: dict[str, str],
+    answer: RagAnswer,
+    checkpoints_before: int,
+) -> ChatTurn:
+    """Wrap a validated answer in the same result shape the graph nodes produce."""
+
+    status = STATUS_ANSWERED if answer.answered else STATUS_REFUSED
+    return ChatTurn(
+        thread_id=thread_id,
+        run=AgentRun(
+            question=answer.question,
+            status=status,
+            intent=str(Intent.KNOWLEDGE),
+            intent_confidence=0.0,
+            intent_source="stream",
+            answer=answer.text,
+            citations=tuple(citation.as_dict() for citation in answer.citations),
+            trace=(f"knowledge:{status}:citations={len(answer.citations)}",),
+            tool_results=(),
+            pending_confirmation=None,
+            created_ticket=None,
+            error_code=None if answer.refusal_cause is None else str(answer.refusal_cause),
+            error_message=answer.reason,
+            clarification_turns=0,
+        ),
+        window=window,
+        preferences=dict(preferences),
+        pending_action=None,
+        checkpoints_before=checkpoints_before,
+        checkpoints_after=checkpoints_before,  # 流式路径只读不写检查点
+    )
 
 
 def _history(graph: Any, config: dict[str, Any]) -> list[Any]:

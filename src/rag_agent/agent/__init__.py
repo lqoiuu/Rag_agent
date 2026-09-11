@@ -18,6 +18,7 @@ from rag_agent.agent.graph import (
     build_initial_state,
     chat_turn,
     run_agent,
+    stream_chat_turn,
 )
 from rag_agent.agent.intent import (
     DEFAULT_MIN_CONFIDENCE,
@@ -71,4 +72,5 @@ __all__ = [
     "prefer_device",
     "resolve_device_id",
     "run_agent",
+    "stream_chat_turn",
 ]

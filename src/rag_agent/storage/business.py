@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -173,8 +174,14 @@ class BusinessRepository:
 
     def __init__(self, path: Path | str) -> None:
         self._path = str(path)
-        self._connection = sqlite3.connect(self._path)
+        # See MetadataStore: a Streamlit rerun runs in a different thread than the one
+        # that built the repository, and this file is shared with the metadata and
+        # checkpoint tables, so writes are serialized through a re-entrant lock.
+        self._lock = threading.RLock()
+        self._connection = sqlite3.connect(self._path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        if self._path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode=WAL")
         self.initialize()
 
     @property
@@ -182,12 +189,13 @@ class BusinessRepository:
         return self._path
 
     def initialize(self) -> None:
-        with self._connection:
+        with self._lock, self._connection:
             for statement in BUSINESS_SCHEMA:
                 self._connection.execute(statement)
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def __enter__(self) -> BusinessRepository:
         return self
@@ -204,7 +212,7 @@ class BusinessRepository:
         orders = _as_list(payload.get("orders"))
         verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
 
-        with self._connection:
+        with self._lock, self._connection:
             for user in users:
                 self._connection.execute(
                     f"{verb} INTO users (user_id, name, phone_masked, email) VALUES (?, ?, ?, ?)",
@@ -308,7 +316,7 @@ class BusinessRepository:
     ) -> TicketRecord:
         """Insert one ticket; the unique idempotency key prevents duplicates."""
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT INTO tickets (

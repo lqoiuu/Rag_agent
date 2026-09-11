@@ -358,7 +358,7 @@ class SQLiteCheckpointer(BaseCheckpointSaver[str]):
 
         Two facts about how LangGraph drives a synchronous graph shape this code:
 
-        1. ``graph.invoke`` runs nodes 鈥?and therefore checkpoint writes 鈥?on its
+        1. ``graph.invoke`` runs nodes - and therefore checkpoint writes - on its
            own thread pool, so *several threads* can call ``put``/``put_writes`` on
            one saver at the same time. ``check_same_thread=False`` allows that, but
            Python's ``sqlite3`` module is not safe under concurrent use of one

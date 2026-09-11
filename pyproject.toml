@@ -22,6 +22,7 @@ dependencies = [
     "langgraph>=1,<2",
     "pydantic-settings>=2.10,<3",
     "pypdf>=6,<7",
+    "streamlit>=1.57,<2",
 ]
 
 [project.scripts]
