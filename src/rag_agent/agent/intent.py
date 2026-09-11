@@ -57,8 +57,14 @@ def classify_intent(
     chat_model: ChatModel,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     temperature: float = 0.0,
+    context: str = "",
 ) -> IntentDecision:
-    """Classify one question, falling back to ``unknown`` when unusable."""
+    """Classify one question, falling back to ``unknown`` when unusable.
+
+    ``context`` carries the recent conversation so a follow-up such as
+    "那它还在保修吗" can be classified at all. It is prompt input only: routing
+    still depends on the returned label and confidence, never on the context text.
+    """
 
     cleaned = question.strip()
     if not cleaned:
@@ -67,7 +73,7 @@ def classify_intent(
     response = chat_model.chat(
         [
             ChatMessage(role="system", content=INTENT_SYSTEM_PROMPT),
-            ChatMessage(role="user", content=cleaned),
+            ChatMessage(role="user", content=f"{context}{cleaned}"),
         ],
         temperature=temperature,
     )

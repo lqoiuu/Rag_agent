@@ -155,8 +155,15 @@ def build_context(
     return "\n\n".join(blocks), tuple(used_hits)
 
 
-def build_user_prompt(question: str, context: str) -> str:
-    return f"资料：\n{context}\n\n问题：{question}"
+def build_user_prompt(question: str, context: str, conversation_context: str = "") -> str:
+    """Build the user turn, optionally prefixed with recent conversation.
+
+    ``conversation_context`` is rendered *before* the numbered evidence on purpose:
+    the evidence stays closest to the question, and the block is labelled as
+    context for resolving references rather than as a source of facts.
+    """
+
+    return f"{conversation_context}资料：\n{context}\n\n问题：{question}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +179,7 @@ class PreparedAnswer:
     context: str
     hits: tuple[RetrievalHit, ...]
     refusal: RagAnswer | None = None
+    conversation_context: str = ""
 
     @property
     def has_evidence(self) -> bool:
@@ -186,6 +194,7 @@ def prepare_answer(
     threshold: float | None = None,
     source: str | None = None,
     max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+    conversation_context: str = "",
 ) -> PreparedAnswer:
     """Retrieve evidence and build the numbered context."""
 
@@ -213,6 +222,7 @@ def prepare_answer(
         retrieval=retrieval,
         context=context,
         hits=used_hits,
+        conversation_context=conversation_context,
     )
 
 
@@ -221,7 +231,12 @@ def build_messages(prepared: PreparedAnswer) -> list[ChatMessage]:
 
     return [
         ChatMessage(role="system", content=RAG_SYSTEM_PROMPT),
-        ChatMessage(role="user", content=build_user_prompt(prepared.question, prepared.context)),
+        ChatMessage(
+            role="user",
+            content=build_user_prompt(
+                prepared.question, prepared.context, prepared.conversation_context
+            ),
+        ),
     ]
 
 
@@ -234,6 +249,7 @@ def answer_with_context(
     threshold: float | None = None,
     source: str | None = None,
     max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+    conversation_context: str = "",
     temperature: float = 0.0,
 ) -> RagAnswer:
     """Retrieve evidence, then answer strictly from it."""
@@ -245,6 +261,7 @@ def answer_with_context(
         threshold=threshold,
         source=source,
         max_context_chars=max_context_chars,
+        conversation_context=conversation_context,
     )
     if prepared.refusal is not None:
         return prepared.refusal

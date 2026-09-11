@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent_test_support import (
     MANUAL_PAGE_27,
     agent_dependencies,
@@ -25,11 +27,12 @@ from rag_agent.agent import (
     STATUS_PENDING_CONFIRMATION,
     STATUS_REFUSED,
     STATUS_TICKET_CREATED,
-    AgentNodes,
     Intent,
     build_agent_graph,
+    chat_turn,
     run_agent,
 )
+from rag_agent.memory import SQLiteCheckpointer
 from rag_agent.tools import create_ticket
 from rag_agent.tools.models import CreateTicketArgs
 
@@ -168,24 +171,36 @@ def test_ticket_request_missing_fields_asks_for_them() -> None:
     assert "联系方式" in run.answer
 
 
-def test_confirmed_run_creates_exactly_one_ticket() -> None:
+def test_confirmed_run_creates_exactly_one_ticket(tmp_path: Path) -> None:
+    """The pause/resume pair: a paused run writes nothing, a resumed one writes once."""
+
     with agent_dependencies(
         intent_reply("ticket"),
         extract_reply(device_id="D2001", issue="主刷一直卡住", contact="138****0001"),
     ) as (retriever, model, repository):
-        run = run_agent(
-            "帮我把 D2001 报修，主刷一直卡住，联系我 138****0001",
-            retriever=retriever,
-            chat_model=model,
-            repository=repository,
-            user_id="U1001",
-            confirmation={"confirmed": True},
-        )
+        with SQLiteCheckpointer(tmp_path / "state.sqlite3") as checkpointer:
+            graph = build_agent_graph(
+                retriever=retriever,
+                chat_model=model,
+                repository=repository,
+                checkpointer=checkpointer,
+            )
+            paused = chat_turn(
+                graph,
+                "帮我把 D2001 报修，主刷一直卡住，联系我 138****0001",
+                thread_id="T1",
+                user_id="U1001",
+            )
+            assert paused.paused is True
+            assert repository.list_tickets() == ()
 
-        assert run.status == STATUS_TICKET_CREATED
-        assert run.created_ticket is not None
-        assert run.created_ticket["ticket_id"].startswith("T")
+            resumed = chat_turn(graph, "", thread_id="T1", resume={"confirmed": True})
+
+        assert resumed.run.status == STATUS_TICKET_CREATED
+        assert resumed.run.created_ticket is not None
+        assert resumed.run.created_ticket["ticket_id"].startswith("T")
         assert len(repository.list_tickets()) == 1
+        assert "ticket_create:created=True" in resumed.run.trace
 
 
 def test_clarification_limit_prevents_endless_asking() -> None:
@@ -222,25 +237,39 @@ def test_graph_has_no_direct_edge_from_collection_to_the_write() -> None:
     assert (NODE_CLASSIFY, NODE_CLARIFY) in edges
 
 
-def test_create_node_refuses_to_write_without_confirmation() -> None:
-    with agent_dependencies() as (retriever, model, repository):
-        nodes = AgentNodes(retriever=retriever, chat_model=model, repository=repository)
-        update = nodes.ticket_create(
-            {
-                "question": "报修",
-                "ticket_draft": {
-                    "user_id": "U1001",
-                    "device_id": "D2001",
-                    "issue": "主刷一直卡住",
-                    "contact": "138****0001",
-                },
-                "confirmation": None,
-            }
+def test_create_node_pauses_before_any_write(tmp_path: Path) -> None:
+    """The node's first action is the human pause, so entering it writes nothing.
+
+    ``interrupt()`` needs a runnable context, so this goes through the graph rather
+    than calling the node directly — which is also the honest version of the claim:
+    a run that reaches the write node stops before the write.
+    """
+
+    with (
+        agent_dependencies(
+            intent_reply("ticket"),
+            extract_reply(device_id="D2001", issue="主刷一直卡住", contact="138****0001"),
+        ) as (retriever, model, repository),
+        SQLiteCheckpointer(tmp_path / "state.sqlite3") as checkpointer,
+    ):
+        graph = build_agent_graph(
+            retriever=retriever,
+            chat_model=model,
+            repository=repository,
+            checkpointer=checkpointer,
+        )
+        turn = chat_turn(
+            graph,
+            "帮我把 D2001 报修，主刷一直卡住，联系我 138****0001",
+            thread_id="T-blocked",
+            user_id="U1001",
         )
 
-        assert update["status"] == STATUS_ERROR
-        assert update["error_code"] == "confirmation_required"
+        assert turn.paused is True
+        assert turn.pending_action is not None
+        assert turn.pending_action["action"] == "ticket.create"
         assert repository.list_tickets() == ()
+        assert not any("ticket_create" in entry for entry in turn.run.trace)
 
 
 def test_tool_layer_also_refuses_unconfirmed_writes() -> None:

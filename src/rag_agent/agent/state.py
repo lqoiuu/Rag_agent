@@ -18,6 +18,7 @@ STATUS_REFUSED = "refused"
 STATUS_NEEDS_INPUT = "needs_input"
 STATUS_PENDING_CONFIRMATION = "pending_confirmation"
 STATUS_TICKET_CREATED = "ticket_created"
+STATUS_TICKET_CANCELLED = "ticket_cancelled"
 STATUS_ERROR = "error"
 
 TERMINAL_STATUSES = (
@@ -26,6 +27,7 @@ TERMINAL_STATUSES = (
     STATUS_NEEDS_INPUT,
     STATUS_PENDING_CONFIRMATION,
     STATUS_TICKET_CREATED,
+    STATUS_TICKET_CANCELLED,
     STATUS_ERROR,
 )
 
@@ -38,6 +40,11 @@ class AgentState(TypedDict, total=False):
     user_id: str | None
     device_id: str | None
     contact: str | None
+
+    # 多轮记忆
+    thread_id: str
+    prompt_context: str
+    preferences: dict[str, str]
 
     # 意图识别
     intent: str

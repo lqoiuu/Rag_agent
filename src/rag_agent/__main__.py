@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +13,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from rag_agent.agent import STATUS_ANSWERED, STATUS_TICKET_CREATED, run_agent
+from rag_agent.agent import (
+    STATUS_ANSWERED,
+    STATUS_TICKET_CANCELLED,
+    STATUS_TICKET_CREATED,
+    ChatTurn,
+    build_agent_graph,
+    chat_turn,
+    run_agent,
+)
 from rag_agent.config import build_chat_model, build_embedding_model, get_settings
 from rag_agent.config.settings import Settings
 from rag_agent.domain.errors import IngestionError
@@ -46,6 +55,13 @@ from rag_agent.ingestion import (
     split_document,
     summarize_chunks,
     sync_index,
+)
+from rag_agent.memory import (
+    ConversationStore,
+    ConversationWindow,
+    SQLiteCheckpointer,
+    ThreadOwnershipError,
+    render_prompt_context,
 )
 from rag_agent.observability.logging import configure_logging
 from rag_agent.providers.base import ChatModel, EmbeddingModel, ModelError
@@ -103,15 +119,17 @@ def build_parser() -> argparse.ArgumentParser:
             "evaluate",
             "tool",
             "agent",
+            "chat",
+            "thread",
         ),
         help="Command to execute.",
     )
     parser.add_argument(
         "argument",
         nargs="?",
-        help='Question text for "ask", "answer" and "search", a file path for '
-        '"chunk-report", a path for "ingest", or a stored source label for '
-        '"delete-document".',
+        help='Question text for "ask", "answer", "search", "agent" and "chat"; a file path for '
+        '"chunk-report"; a path for "ingest"; a stored source label for "delete-document"; '
+        'or "list" / "clear" / "preferences" for "thread".',
     )
     parser.add_argument(
         "--chunk-sizes",
@@ -188,7 +206,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm",
         action="store_true",
-        help="Treat the pending action as confirmed; stage 11 replaces this with a real resume.",
+        help="Confirm the pending action of a stored thread and resume it.",
+    )
+    parser.add_argument(
+        "--cancel",
+        action="store_true",
+        help="Reject the pending action of a stored thread; no write is performed.",
+    )
+    parser.add_argument(
+        "--thread-id",
+        default="",
+        help='Conversation id for "chat" and "thread"; one id is one isolated conversation.',
+    )
+    parser.add_argument(
+        "--preference",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Long-term user preference to store, for example --preference contact=email.",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=None,
+        help="Override how many recent messages are rendered into the prompt.",
     )
     return parser
 
@@ -725,9 +766,14 @@ def _agent(
     user_id: str,
     device_id: str,
     contact: str,
-    confirm: bool,
 ) -> int:
-    """Run one turn of the LangGraph workflow and print its trace and result."""
+    """Run one stateless turn of the LangGraph workflow and print its trace.
+
+    This is the stage 10 view: no checkpointer, so a ticket request stops at
+    ``pending_confirmation`` and writes nothing. There is deliberately no
+    ``--confirm`` here — resuming a paused run is what ``chat`` does, with a stored
+    thread and a real interrupt.
+    """
 
     settings = get_settings()
     try:
@@ -740,7 +786,6 @@ def _agent(
                 user_id=user_id or None,
                 device_id=device_id or None,
                 contact=contact or None,
-                confirmation={"confirmed": True} if confirm else None,
             )
     except ModelError as exc:
         _error_payload(exc.code, str(exc))
@@ -753,6 +798,243 @@ def _agent(
     if run.status in (STATUS_ANSWERED, STATUS_TICKET_CREATED):
         return EXIT_OK
     return EXIT_PARTIAL_FAILURE
+
+
+@contextmanager
+def _open_conversation(
+    settings: Settings,
+) -> Iterator[tuple[Any, Retriever, ChatModel, BusinessRepository, ConversationStore]]:
+    """Open everything a multi-turn conversation needs.
+
+    The checkpointer and the conversation registry share one SQLite file but keep
+    separate connections, so a thread listing never depends on the checkpointer
+    being open.
+    """
+
+    vectors = ChunkVectorStore(settings.chroma_dir)
+    with (
+        SQLiteCheckpointer(settings.checkpoint_path) as checkpointer,
+        ConversationStore(settings.checkpoint_path) as conversations,
+        build_embedding_model(settings) as embedding_model,
+        build_chat_model(settings) as chat_model,
+        BusinessRepository(settings.sqlite_path) as repository,
+    ):
+        repository.seed_from_file(settings.data_dir / "business" / "seed.json")
+        retriever = Retriever(
+            vectors=vectors,
+            embedding_model=embedding_model,
+            config=RetrieverConfig(
+                top_k=settings.retrieval_top_k,
+                threshold=settings.retrieval_threshold,
+            ),
+        )
+        yield checkpointer, retriever, chat_model, repository, conversations
+
+
+def _parse_preferences(items: Sequence[str]) -> dict[str, str]:
+    """Parse repeated ``KEY=VALUE`` flags into a mapping."""
+
+    preferences: dict[str, str] = {}
+    for item in items:
+        key, separator, value = item.partition("=")
+        if not separator or not key.strip():
+            raise ValueError(f"--preference expects KEY=VALUE, got {item!r}")
+        preferences[key.strip()] = value.strip()
+    return preferences
+
+
+def _new_thread_id() -> str:
+    """A short, sortable, obviously-generated conversation id."""
+
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    return f"T{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def _chat(
+    question: str,
+    *,
+    thread_id: str,
+    user_id: str,
+    device_id: str,
+    contact: str,
+    confirm: bool,
+    cancel: bool,
+    preferences: Sequence[str],
+    window: int | None,
+) -> int:
+    """Run one turn of a persisted conversation, or resolve a pending action."""
+
+    settings = get_settings()
+    thread = thread_id.strip() or _new_thread_id()
+    resume = None
+    if confirm or cancel:
+        resume = {"confirmed": confirm}
+
+    try:
+        extra_preferences = _parse_preferences(preferences)
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    try:
+        with _open_conversation(settings) as (
+            checkpointer,
+            retriever,
+            chat_model,
+            repository,
+            conversations,
+        ):
+            conversations.ensure_thread(thread, user_id or None)
+            stored = conversations.load_preferences(user_id or None)
+            stored.update(extra_preferences)
+            for key, value in extra_preferences.items():
+                conversations.save_preference(user_id, key, value)
+
+            graph = build_agent_graph(
+                retriever=retriever,
+                chat_model=chat_model,
+                repository=repository,
+                checkpointer=checkpointer,
+            )
+            turn = chat_turn(
+                graph,
+                question,
+                thread_id=thread,
+                user_id=user_id or None,
+                device_id=device_id or None,
+                contact=contact or None,
+                window_size=window if window is not None else settings.conversation_window_size,
+                preferences=stored,
+                resume=resume,
+            )
+            conversations.touch_thread(thread)
+            _record_turn(graph, thread, turn, user_id=user_id or None, question=question)
+    except ThreadOwnershipError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ModelError as exc:
+        _error_payload(exc.code, str(exc))
+        return EXIT_ERROR
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    print(json.dumps(turn.as_dict(), ensure_ascii=False, indent=2))
+    if turn.status in (STATUS_ANSWERED, STATUS_TICKET_CREATED, STATUS_TICKET_CANCELLED):
+        return EXIT_OK
+    return EXIT_PARTIAL_FAILURE
+
+
+def _record_turn(
+    graph: Any,
+    thread_id: str,
+    turn: ChatTurn,
+    *,
+    user_id: str | None,
+    question: str,
+) -> None:
+    """Append this turn to the conversation, which is what makes it multi-turn.
+
+    The append is a state update, not a graph run: it adds the user message and the
+    assistant reply to the ``messages`` channel through its reducer, so the next
+    turn can read them without replaying any node.
+    """
+
+    config = {"configurable": {"thread_id": thread_id}}
+    if turn.paused:
+        return
+    updates: list[dict[str, object]] = [{"role": "user", "content": question}]
+    if turn.run.answer:
+        updates.append({"role": "assistant", "content": turn.run.answer})
+    if not question:
+        updates.pop(0)
+    if not updates:
+        return
+    graph.update_state(config, {"messages": updates})
+
+
+def _thread(action: str, *, thread_id: str, user_id: str, preferences: Sequence[str]) -> int:
+    """List, clear or inspect the stored conversations."""
+
+    settings = get_settings()
+    name = (action or "list").strip().lower()
+
+    try:
+        with ConversationStore(settings.checkpoint_path) as conversations:
+            if name == "list":
+                threads = conversations.list_threads(user_id or None)
+                print(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "user_id": user_id or None,
+                            "thread_count": len(threads),
+                            "threads": [thread.as_dict() for thread in threads],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return EXIT_OK
+
+            if name == "clear":
+                if not thread_id.strip():
+                    _error_payload("invalid_argument", "thread clear requires --thread-id")
+                    return EXIT_ERROR
+                owner = conversations.owner_of(thread_id)
+                if owner is not None and (user_id or None) != owner:
+                    _error_payload(
+                        "thread_ownership_conflict",
+                        f"thread {thread_id!r} belongs to another user",
+                    )
+                    return EXIT_ERROR
+                removed = conversations.clear_thread(thread_id)
+                print(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "thread_id": thread_id,
+                            "checkpoints_removed": removed,
+                            "note": "长期偏好保存在 user_preferences 中，不随会话清除。",
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return EXIT_OK
+
+            if name == "preferences":
+                parsed = _parse_preferences(preferences)
+                for key, value in parsed.items():
+                    if not user_id:
+                        _error_payload("invalid_argument", "thread preferences requires --user-id")
+                        return EXIT_ERROR
+                    conversations.save_preference(user_id, key, value)
+                stored = conversations.load_preferences(user_id or None)
+                print(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "user_id": user_id or None,
+                            "preferences": stored,
+                            "rendered": render_prompt_context(
+                                ConversationWindow(messages=()),
+                                stored,
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return EXIT_OK
+    except ValueError as exc:
+        _error_payload("invalid_argument", str(exc))
+        return EXIT_ERROR
+
+    _error_payload(
+        "unknown_action", f"unknown thread action {name!r}; use list, clear or preferences"
+    )
+    return EXIT_ERROR
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -837,12 +1119,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(
                 'agent requires a question, for example: rag-agent agent "D2001 还在保修吗"'
             )
+        if args.confirm or args.cancel:
+            parser.error(
+                "agent is stateless and never resumes a paused run; use "
+                "rag-agent chat --thread-id T1 --user-id U1001 --confirm"
+            )
         return _agent(
             question,
             user_id=args.user_id,
             device_id=args.device_id,
             contact=args.contact,
+        )
+
+    if args.command == "chat":
+        question = (args.argument or "").strip()
+        if args.confirm and args.cancel:
+            parser.error("--confirm and --cancel cannot be combined")
+        if not question and not (args.confirm or args.cancel):
+            parser.error(
+                "chat requires a question, for example: "
+                'rag-agent chat "D2001 还在保修吗" --thread-id T1 --user-id U1001'
+            )
+        if args.window is not None and args.window <= 0:
+            parser.error("--window must be positive")
+        return _chat(
+            question,
+            thread_id=args.thread_id,
+            user_id=args.user_id,
+            device_id=args.device_id,
+            contact=args.contact,
             confirm=args.confirm,
+            cancel=args.cancel,
+            preferences=args.preference,
+            window=args.window,
+        )
+
+    if args.command == "thread":
+        return _thread(
+            args.argument or "list",
+            thread_id=args.thread_id,
+            user_id=args.user_id,
+            preferences=args.preference,
         )
 
     raise AssertionError(f"Unhandled command: {args.command}")

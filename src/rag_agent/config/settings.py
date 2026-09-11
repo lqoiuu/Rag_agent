@@ -10,6 +10,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_agent.domain.retrieval import DEFAULT_THRESHOLD, DEFAULT_TOP_K
+from rag_agent.memory.conversation import DEFAULT_WINDOW_SIZE
 from rag_agent.providers.qwen import (
     DEFAULT_BASE_URL,
     DEFAULT_CHAT_MODEL,
@@ -44,8 +45,10 @@ class Settings(BaseSettings):
     model_max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0)
     retrieval_top_k: int = Field(default=DEFAULT_TOP_K, ge=1)
     retrieval_threshold: float = Field(default=DEFAULT_THRESHOLD, ge=-1.0, le=1.0)
+    conversation_window_size: int = Field(default=DEFAULT_WINDOW_SIZE, ge=1)
+    checkpoint_path: Path = Path("data/rag_agent.sqlite3")
 
-    @field_validator("data_dir", "chroma_dir", "sqlite_path", mode="before")
+    @field_validator("data_dir", "chroma_dir", "sqlite_path", "checkpoint_path", mode="before")
     @classmethod
     def resolve_project_path(cls, value: str | Path) -> Path:
         path = Path(value).expanduser()

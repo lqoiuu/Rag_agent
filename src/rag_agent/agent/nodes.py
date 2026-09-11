@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from langgraph.types import interrupt
+
 from rag_agent.agent.intent import classify_intent
 from rag_agent.agent.state import (
     STATUS_ANSWERED,
@@ -18,6 +20,7 @@ from rag_agent.agent.state import (
     STATUS_NEEDS_INPUT,
     STATUS_PENDING_CONFIRMATION,
     STATUS_REFUSED,
+    STATUS_TICKET_CANCELLED,
     STATUS_TICKET_CREATED,
     AgentState,
 )
@@ -67,7 +70,11 @@ class AgentNodes:
     def classify(self, state: AgentState) -> dict[str, object]:
         """Decide the task type; unusable answers fall back to ``unknown``."""
 
-        decision = classify_intent(state.get("question", ""), chat_model=self.chat_model)
+        decision = classify_intent(
+            state.get("question", ""),
+            chat_model=self.chat_model,
+            context=state.get("prompt_context", ""),
+        )
         return {
             "intent": str(decision.intent),
             "intent_confidence": decision.confidence,
@@ -79,10 +86,12 @@ class AgentNodes:
     def knowledge(self, state: AgentState) -> dict[str, object]:
         """Answer from the knowledge base, with citations or an explicit refusal."""
 
+        question = state.get("question", "")
         answer = answer_with_context(
-            state.get("question", ""),
+            question,
             retriever=self.retriever,
             chat_model=self.chat_model,
+            conversation_context=state.get("prompt_context", ""),
         )
         citations = [citation.as_dict() for citation in answer.citations]
         if answer.answered:
@@ -142,7 +151,7 @@ class AgentNodes:
     def ticket_collect(self, state: AgentState) -> dict[str, object]:
         """Collect what a ticket needs, asking the model only to read the message."""
 
-        extracted = self._extract_ticket_fields(state.get("question", ""))
+        extracted = self._extract_ticket_fields(state)
         draft: dict[str, object] = {
             "user_id": (state.get("user_id") or "").strip() or None,
             "device_id": (state.get("device_id") or extracted.get("device_id") or "").strip()
@@ -177,23 +186,36 @@ class AgentNodes:
         }
 
     def ticket_create(self, state: AgentState) -> dict[str, object]:
-        """Write the ticket, but only when the state carries a confirmation.
+        """Ask the human to confirm, then write — in that order, every time.
 
-        The graph only reaches this node from the confirmation branch, and the
-        tool itself refuses unconfirmed writes, so the model has two independent
-        barriers in front of the write.
+        ``interrupt()`` is the *first* statement of this node, before any tool
+        call. LangGraph raises it on the first execution and hands the run back to
+        the caller with the graph paused here; the node is re-entered with the
+        resume payload when the caller answers. Because the pause happens before
+        the write, a cancellation cannot leave a partial ticket behind, and a
+        resumed-and-then-failed run cannot double-write.
         """
 
-        confirmation = state.get("confirmation") or {}
-        if confirmation.get("confirmed") is not True:
+        draft = state.get("ticket_draft") or {}
+        decision = interrupt(
+            {
+                "action": "ticket.create",
+                "summary": _ticket_summary(draft),
+                "draft": draft,
+                "instructions": (
+                    "调用方传入 {'confirmed': true} 才写库，{'confirmed': false} 表示取消。"
+                ),
+            }
+        )
+        if not _is_confirmed(decision):
             return {
-                "status": STATUS_ERROR,
-                "error_code": "confirmation_required",
-                "error_message": "ticket creation was reached without a confirmed action",
-                "trace": ["ticket_create:blocked"],
+                "status": STATUS_TICKET_CANCELLED,
+                "answer": "已取消，未创建工单。如需报修请重新发起请求。",
+                "pending_confirmation": None,
+                "created_ticket": None,
+                "trace": ["ticket_create:cancelled"],
             }
 
-        draft = state.get("ticket_draft") or {}
         try:
             result = create_ticket(
                 CreateTicketArgs(
@@ -226,6 +248,7 @@ class AgentNodes:
         return {
             "status": STATUS_TICKET_CREATED,
             "created_ticket": ticket if isinstance(ticket, dict) else None,
+            "pending_confirmation": None,
             "tool_results": [result.model_dump()],
             "answer": f"已创建售后工单 {ticket.get('ticket_id', '')}".strip(),
             "trace": [f"ticket_create:created={data.get('created')}"],
@@ -281,11 +304,16 @@ class AgentNodes:
             payload["ticket_draft"] = draft
         return payload
 
-    def _extract_ticket_fields(self, question: str) -> dict[str, str | None]:
+    def _extract_ticket_fields(self, state: AgentState) -> dict[str, str | None]:
+        """Read the ticket fields out of the message; the model is not asked to invent."""
+
         response = self.chat_model.chat(
             [
                 ChatMessage(role="system", content=TICKET_EXTRACT_SYSTEM_PROMPT),
-                ChatMessage(role="user", content=question),
+                ChatMessage(
+                    role="user",
+                    content=f"{state.get('prompt_context', '')}{state.get('question', '')}",
+                ),
             ]
         )
         payload = extract_json_object(response.text) or {}
@@ -294,6 +322,14 @@ class AgentNodes:
             "issue": _as_text(payload.get("issue")),
             "contact": _as_text(payload.get("contact")),
         }
+
+
+def _is_confirmed(decision: object) -> bool:
+    """Accept only an explicit confirmation from the resume payload."""
+
+    if isinstance(decision, dict):
+        return decision.get("confirmed") is True
+    return False
 
 
 def _as_text(value: object) -> str | None:

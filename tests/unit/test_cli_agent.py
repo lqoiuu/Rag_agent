@@ -87,21 +87,26 @@ def test_ticket_turn_returns_a_pending_confirmation(
     assert payload["created_ticket"] is None
 
 
-def test_confirm_flag_creates_the_ticket(
+def test_agent_command_has_no_confirm_switch(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """``agent`` is stateless; resuming a paused run is what ``chat`` does.
+
+    Stage 11 moved the confirmation out of a flag and into a graph interrupt, so the
+    old ``agent --confirm`` shortcut is gone. The paused-then-confirmed flow is
+    covered end to end in ``test_cli_chat.py``.
+    """
+
     install(
         monkeypatch,
         intent_reply("ticket"),
         extract_reply(device_id="D2001", issue="主刷一直卡住", contact="138****0001"),
     )
 
-    exit_code = cli.main(["agent", "帮我把 D2001 报修", "--user-id", "U1001", "--confirm"])
-    payload = json.loads(capsys.readouterr().out)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["agent", "帮我把 D2001 报修", "--user-id", "U1001", "--confirm"])
 
-    assert exit_code == 0
-    assert payload["status"] == "ticket_created"
-    assert payload["created_ticket"]["ticket_id"].startswith("T")
+    assert excinfo.value.code == 2
 
 
 def test_low_confidence_intent_asks_for_clarification(

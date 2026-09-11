@@ -2,6 +2,7 @@
 
 from rag_agent.agent.graph import (
     DEFAULT_RECURSION_LIMIT,
+    DEFAULT_WINDOW_SIZE,
     NODE_CLARIFY,
     NODE_CLASSIFY,
     NODE_DEVICE,
@@ -11,7 +12,10 @@ from rag_agent.agent.graph import (
     NODE_TICKET_CREATE,
     NODE_TICKET_PENDING,
     AgentRun,
+    ChatTurn,
     build_agent_graph,
+    build_initial_state,
+    chat_turn,
     run_agent,
 )
 from rag_agent.agent.intent import (
@@ -27,6 +31,7 @@ from rag_agent.agent.state import (
     STATUS_NEEDS_INPUT,
     STATUS_PENDING_CONFIRMATION,
     STATUS_REFUSED,
+    STATUS_TICKET_CANCELLED,
     STATUS_TICKET_CREATED,
     AgentState,
 )
@@ -35,6 +40,7 @@ __all__ = [
     "DEFAULT_MAX_CLARIFICATIONS",
     "DEFAULT_MIN_CONFIDENCE",
     "DEFAULT_RECURSION_LIMIT",
+    "DEFAULT_WINDOW_SIZE",
     "NODE_CLARIFY",
     "NODE_CLASSIFY",
     "NODE_DEVICE",
@@ -48,13 +54,17 @@ __all__ = [
     "STATUS_NEEDS_INPUT",
     "STATUS_PENDING_CONFIRMATION",
     "STATUS_REFUSED",
+    "STATUS_TICKET_CANCELLED",
     "STATUS_TICKET_CREATED",
     "AgentNodes",
     "AgentRun",
     "AgentState",
+    "ChatTurn",
     "Intent",
     "IntentDecision",
     "build_agent_graph",
+    "build_initial_state",
+    "chat_turn",
     "classify_intent",
     "run_agent",
 ]
