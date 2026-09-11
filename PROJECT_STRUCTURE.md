@@ -1,7 +1,6 @@
 # 项目结构与文件职责
 
-最后同步：2026-09-11
-## 项目边界
+最后同步：2026-09-11## 项目边界
 
 RAG_AGENT_PROJECT_PLAN.md 位于外层 Rag_agent 目录，负责保存整个项目的阶段路线和协作规则。
 
@@ -83,7 +82,10 @@ rag-agent-assistant/
 │       │   └── schema.py
 │       ├── observability/
 │       │   ├── __init__.py
-│       │   └── logging.py
+│       │   ├── degradation.py
+│       │   ├── logging.py
+│       │   ├── metrics.py
+│       │   └── untrusted.py
 │       ├── providers/
 │       │   ├── __init__.py
 │       │   ├── base.py
@@ -100,7 +102,8 @@ rag-agent-assistant/
 │       │   ├── __init__.py
 │       │   ├── business.py
 │       │   ├── errors.py
-│       │   └── models.py
+│       │   ├── models.py
+│       │   └── permissions.py
 │       ├── ui/
 │       │   ├── __init__.py
 │       │   ├── app.py                  # 界面入口与路由；页面本身在 app_pages/
@@ -140,6 +143,7 @@ rag-agent-assistant/
         ├── test_cli_tool.py
         ├── test_cli_evaluate.py
         ├── test_conversation_memory.py
+        ├── test_degradation.py
         ├── test_documents.py
         ├── test_eval_dataset.py
         ├── test_eval_metrics.py
@@ -152,6 +156,7 @@ rag-agent-assistant/
         ├── test_loaders_pdf.py
         ├── test_logging.py
         ├── test_memory_checkpoints.py
+        ├── test_metrics.py
         ├── test_minimal_chain.py
         ├── test_normalize.py
         ├── test_provider_errors.py
@@ -161,9 +166,11 @@ rag-agent-assistant/
         ├── test_rag_answer.py
         ├── test_rag_answer_stream_context.py
         ├── test_settings.py
-        ├── test_ui_app.py
         ├── test_sqlite_store.py
-        └── test_splitters.py
+        ├── test_splitters.py
+        ├── test_tool_permissions.py
+        ├── test_ui_app.py
+        └── test_untrusted.py
 ~~~
 
 .git、.venv、缓存、字节码和本地运行数据不在结构图中显示；`data/eval/` 属于随代码提交的内容，因此单独列出。
@@ -217,6 +224,9 @@ rag-agent-assistant/
 | src/rag_agent/memory/conversation.py | 会话归属校验、消息窗口裁剪与 Prompt 渲染、长期偏好读写 | 短期记忆与长期记忆的边界、上下文预算 |
 | src/rag_agent/observability/__init__.py | 对外暴露日志配置接口 | 模块边界 |
 | src/rag_agent/observability/logging.py | 输出 JSON 结构化日志，并把 httpx 的 INFO 日志降为 WARNING | Python logging、结构化数据、异常记录 |
+| src/rag_agent/observability/untrusted.py | 把外部文本包进显式不可信边界并给出标注；`scan_injection` 按**标签与位置**上报形似指令的文本（不回显原文，可安全记日志） | 间接 Prompt 注入、信任边界、数据与指令分离 |
+| src/rag_agent/observability/metrics.py | `TurnMetrics`：按段计时、检索命中与最高分、工具调用与失败码、注入疑点；`as_dict()` 是唯一对外形状。明确区分「实测的 turn 耗时」与「自构造以来」 | 运行期可观测性、指标口径 |
+| src/rag_agent/observability/degradation.py | 把模型/工具/检索失败码映射为四种有限动作（retry、answer_partial、refuse、report_error）与面向用户的措辞 | 故障隔离、优雅降级 |
 | src/rag_agent/providers/__init__.py | 对外暴露协议、错误类型、真实实现和 Fake 实现 | 模块边界、公共 API |
 | src/rag_agent/providers/base.py | 定义 ChatMessage、ChatResponse、EmbeddingResponse 等值对象和 ChatModel、EmbeddingModel 协议，以及七类模型错误 | 依赖倒置、结构化类型、错误分类 |
 | src/rag_agent/providers/qwen.py | 通过 httpx 调用 DashScope OpenAI 兼容端点，实现超时、指数退避重试、状态码分类、耗时与 token 记录 | HTTP 客户端、重试策略、密钥外置 |
@@ -229,6 +239,7 @@ rag-agent-assistant/
 | src/rag_agent/tools/__init__.py | 对外暴露工具契约、错误类型与四个工具函数 | 模块边界 |
 | src/rag_agent/tools/models.py | Pydantic 参数与结果模型，含工单草稿、确认标记与派生幂等键 | Schema 校验、幂等键设计 |
 | src/rag_agent/tools/errors.py | 工具错误分类：not_found、permission_denied、invalid_argument、confirmation_required、conflict、unavailable | 工具边界、错误语义 |
+| src/rag_agent/tools/permissions.py | 角色（end_user / support_agent）、每角色工具白名单、属主校验；`assign_role` 只降不升。刻意不 import `tools.business`（会成环），白名单用字面工具名并由测试对齐 `TOOL_NAMES` | 最小权限、授权模型、模块分层 |
 | src/rag_agent/tools/business.py | 四个契约化工具：用户、设备、订单查询与工单创建；失败转成结构化结果而不是字符串 | Function Calling 契约、权限、幂等性与读写风险 |
 | src/rag_agent/retrieval/__init__.py | 对外暴露检索器接口 | 模块边界 |
 | src/rag_agent/retrieval/retriever.py | 查询向量化、Top-K、来源过滤与阈值判定；单次调用可覆盖 top_k、threshold、source | 语义相似度、Top-K、阈值取舍 |
@@ -269,6 +280,10 @@ rag-agent-assistant/
 | tests/unit/test_chunk_stats.py | 分片计数、最小/中位/均值/最大长度、最近秩 p90、直方图分桶和空集合 |
 | tests/unit/test_cli_chunk_report.py | chunk-report 的用法错误、摄取错误、非法参数与多组合实验输出 |
 | tests/unit/test_sqlite_store.py | 元数据往返、版本历史、同版本幂等、任务记录与排序、删除、文件持久化 |
+| tests/unit/test_untrusted.py | 边界包裹的形状（含空正文）、九类指令形态被上报、**六句真实说明书文字不被误报**、发现项只含标签与位置、标签去重 |
+| tests/unit/test_metrics.py | 分段计时、失败阶段仍抛错、token 缺失不报错、检索与工具计数、无工具调用时成功率按 1.0 计、`total_ms` 优先取实测 turn 耗时（含测量 bug 的回归） |
+| tests/unit/test_tool_permissions.py | 白名单与真实工具名对齐、越权在工具层被拒、`support_agent` 可跨用户读、省略 permissions 保持严格、`assign_role` 只降不升（含未知值与路径穿越样式） |
+| tests/unit/test_degradation.py | 每类模型与工具错误码都有策略、瞬时/语义错误的重试区别、拒答有原因、索引不可用属报错而非拒答、未知码永不变成成功、**没有任何一行降级产生事实性回答** |
 | tests/unit/test_chroma_store.py | 向量幂等写入、同 ID 内容替换、按文档删除隔离、查询排序、输入长度校验 |
 | tests/unit/test_ingest_pipeline.py | 未变更短路不调用 Embedding、内容变更替换旧分片、失败保留旧版本并记录任务、删除清理两个存储、分批 Embedding |
 | tests/unit/test_cli_ingest.py | ingest、reindex、delete-document 的参数校验、退出码与成功、部分失败、缺密钥分支 |
@@ -289,7 +304,7 @@ rag-agent-assistant/
 | tests/unit/test_cli_tool.py | tool list 契约输出、查询成功、权限失败退出码 1、未确认拒写、重复创建返回同一工单、参数错误退出码 2 |
 | tests/unit/test_rag_answer.py | 引用校验、编造编号被丢弃与上报、六类拒答原因、上下文预算、提示词与 Provider 异常传播 |
 | tests/unit/test_rag_answer_stream_context.py | 流式与非流式构造同一条提示词、第一轮提示词保持不变、流式增量顺序与拼接结果 |
-| tests/unit/test_ui_app.py | 用 Streamlit 官方 AppTest 无浏览器驱动界面（注入假模型，测试内不联网络）：入口与三页均无异常渲染、空索引有提示、侧边栏新建会话、设备问题走业务工具、报修暂停且取消不写库、确认只建一张工单、上传真的落盘并入库、检索页给出判定依据、流式开关走知识路径 |
+| tests/unit/test_ui_app.py | 用 Streamlit 官方 AppTest 无浏览器驱动界面（注入假模型，测试内不联网络）：入口与三页均无异常渲染、空索引有提示、侧边栏新建会话、设备问题走业务工具、报修暂停且取消不写库、确认只建一张工单、上传真的落盘并入库、检索页给出判定依据、流式开关走知识路径并交接给完整智能体、本轮指标渲染、角色选择器只有两个选项且写入会话值 |
 | tests/unit/test_cli_answer.py | answer 的引用输出、拒答退出码、空索引不调用模型、`--stream` 先流后结果与缺密钥 |
 | tests/unit/test_qwen_stream.py | SSE 增量顺序、噪声与 `[DONE]` 忽略、状态码分类、首个增量后不重试、Fake 分片 |
 | tests/unit/test_ingestion_filters.py | 目录页识别、正常段落与标准表格不被误删、比例与最小行数可配置 |
@@ -310,6 +325,7 @@ rag-agent-assistant/
 | docs/adr/0002-provider-layer.md | 模型接入方式、同步优先取舍和错误分类决策 |
 | docs/adr/0003-conversation-memory.md | 会话持久化用自实现 SQLite Checkpointer、确认用节点内 Interrupt、窗口与长期偏好的边界 |
 | docs/adr/0004-streamlit-ui.md | 界面不承载业务规则、状态分两层、流式与引用校验并存、本轮回合与累积视图的区分 |
+| docs/adr/0005-security-and-observability.md | 信任边界靠结构与引用校验、注入检测只上报、权限只降不升、指标口径与降级动作收敛 |
 
 ## 当前阶段
 
@@ -336,6 +352,8 @@ rag-agent-assistant/
 阶段 11（多轮记忆、Checkpoint 与人工确认）已完成并通过验收，含真实模型的跨进程续聊、跨用户隔离与取消不写库验证。
 
 阶段 12（Streamlit 产品界面）已完成并通过验收，含真实服务进程启动、三页无异常渲染与界面内的确认门禁验证。
+
+阶段 13（安全、可观测性与失败降级）已完成并通过验收，含信任边界与注入上报、工具权限白名单（角色可验证地生效）、运行期指标与统一降级策略；引用越界的实验性修复未达标，已留基线交阶段 14。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -600,6 +618,36 @@ rag-agent-assistant/
 - 该限制的判据由 `routing.prefer_knowledge_for_stream` 单点定义：`knowledge`/`unknown` 自己答，`device`/`ticket` 一律转交；无法分类的问题仍会尝试作答（真没资料会被引用校验拒掉）。
 - 质量门：`pytest` **454 passed, 2 skipped**。
 
+阶段 13 证据（2026-09-11 实际执行）：
+
+- 代码提交：`5f58d6c`（信任边界/指标/权限/降级四个模块与测试）、`0d8645b`（接入图、CLI 与界面）、`8490c0c`（指标计时修复）；评测基线报告 `639cc52`。
+- `ruff check`：All checks passed；`ruff format --check`：132 files already formatted。
+- `mypy`（strict，files = ["src"]）：Success: no issues found in 65 source files。
+- `pytest`：**542 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- 真实模型端到端（离线脚本调用 CLI）：
+
+  | 场景 | 结果 |
+  |---|---|
+  | 知识问答 | `answered`，`metrics.retrieval.hits=5`，`total_ms=4578.1`，本轮轨迹只有 `classify:knowledge` + `knowledge:answered` |
+  | `end_user` 查他人设备 | 退出码 1，`permission_denied`，工具失败计数 1 |
+  | `support_agent` 查同一台设备 | 退出码 0，`device.lookup` 成功（2 次工具调用 0 失败） |
+  | `--role administrator`（未知角色） | 退出码 1，`permission_denied`——**未被当成提权** |
+  | 缺密钥 | 退出码 2，输出含 `action=report_error`、`retryable=false` 与面向用户的措辞，**不伪装成回答** |
+
+**本阶段实测发现并修复的三个真问题**：
+
+1. **角色是空壳**：加上白名单后 `support_agent` 仍被工具的属主规则拦住，跨用户读取实际不可用——文档描述的能力不存在。探针一跑就暴露。已把角色接进属主校验，并有双向测试（end_user 被拒 / support_agent 通过 / 省略 permissions 保持严格）。
+2. **指标计时错了三个数量级**：`total_ms` 报 4.9 毫秒，而同一轮的 Provider 日志显示真实耗时约 2.6 秒。原因是收集器在图返回**之后**才构造，"自构造以来"几乎没有走过时间。这个数看起来完全合理，靠肉眼看输出发现不了。现改为优先采用实测的 `turn` 阶段耗时。
+3. **注入检测的假阳性**：`20V` 里的 20、`6.5` 里的 6 曾被当成说明书表格序号。现要求数字**独立出现**（排除字母后缀、小数、百分号）。
+
+**引用越界（表格序号混淆）的实验结果——未达标，如实记录**：
+
+- 改法：系统提示明确「资料正文里的数字不是引用编号」。
+- 49 条前后对照：回答率 0.7907 → **0.814**，决策正确率 0.8163 → **0.8367**，`no_valid_citation` 6 → **5**。
+- **只有 1 条被解决，5 条仍在**；引用正确率 0.7941 → **0.7429** 反而下降，原因是多答出的 5 条带来额外页码，而该指标要求「所有引用页都在预期页内」。
+- 新增 `classify_dropped_citations` 区分「编号作为独立序号出现在资料正文里」（格式混淆，可定位）与「编号在资料里根本不存在」（编造，不可原谅），停止对成因的猜测。
+- 结论交阶段 14：提示词规则在此处显然太弱，需改用实验性修法（候选：一次要求模型就已作出的论断重新选择范围内的引用编号），并与本次基线对照。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`。**阶段 11 已用 `tests/conftest.py` 覆盖内置 `tmp_path`，把每个用例的临时目录放到项目内的 `.pytest_tmp/`（已被 .gitignore 忽略）**，因此沙箱内不再出现该错误；`.pytest_tmp/` 与 `pytest-cache-files-*` 仍属沙箱副作用，可安全删除。
@@ -670,22 +718,37 @@ rag-agent-assistant/
 - 界面复用 CLI 的同一批入口（`chat_turn`/`stream_chat_turn`/`ingest_path`/`sync_index`/`remove_document`），因此不能绕过写操作门禁。
 - 知识库页支持上传、查看、删除与重建索引，且每次 rerun 重新读取真实状态，提交结果用一次性会话值传递以避免重复入库。
 - 流式路径与一次性路径构造同一条提示词（最近对话 + 长期偏好 + 编号资料），由测试固定。
+- 索引文档的正文被显式包裹为不可信数据，系统提示声明块内不是指令；形似指令的文字会被上报（`injection_suspected`）但**从不改变回答**。
+- 工具权限白名单与角色：`end_user` 只能读自己的记录，`support_agent` 可跨用户读取；角色由调用方声明、只能下调，未知值落回最严格角色；越权在工具边界、任何仓储访问之前被拒。
+- 运行期指标：本轮总耗时、检索命中数与最高分、工具调用与失败码、注入疑点，随 `chat` 输出与界面指标面板可见。
+- 统一降级策略：模型、工具与检索失败映射为 retry / answer_partial / refuse / report_error 四种动作与面向用户的措辞，命令行与界面共用；没有任何一行降级会产生事实性回答。
+- 引用越界成因可区分：`classify_dropped_citations` 分开「资料里作为独立序号出现的编号」（格式混淆）与「资料里根本没有的编号」（编造）。
 
 ## 尚未实现
 
-- 安全与可观测性降级（阶段 13）、Docker 与最终交付（阶段 14）。
-- 界面身份认证：侧边栏的「用户编号」只是演示标识，任何访问者都能填任意编号。
-- 由用户文本「确认/取消」触发恢复：当前必须用 `--confirm` / `--cancel` 或界面按钮显式表达，以避免让模型决定是否写库。
-- 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
-- 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
+- Docker 与最终交付（阶段 14），以及阶段 14 才做的最终评测报告。
+- **引用越界的实验性修复**：提示词规则只解决 6 条中的 1 条，余 5 条需在阶段 14 用可对照的实验处理（基线与指标已记录）。
 - 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
-- 表格序号与上下文编号混淆导致的引用越界（6 条），需要更强的格式约束或校验提示。
-- 角色与权限表：当前只有「属主」一条规则，模拟定位下够用但不足以表达更细的授权。
+- 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
+- 界面身份认证与更细的写权限：角色与用户编号都是自述，任何访问者都能填；白名单对两种角色开放的工具集合相同，区别只在能读谁的记录。
+- token 用量未并入指标：它由 Provider 层记录在日志里，还没有写回图状态。
+- 矢量轮廓 PDF 的文本提取（需要 OCR，当前明确不支持）。
 - 界面自动化覆盖的边界：`AppTest` 无法触发图表/表格的**选择**事件，也无法验证自定义组件 JavaScript 与最终视觉效果，这部分仍需人工查看页面。
 
 ## 最近结构变化
 
-本次同步（阶段 12）相对上一次的主要变化：
+本次同步（阶段 13）相对上一次的主要变化：
+
+- 新增 `src/rag_agent/observability/untrusted.py`、`metrics.py`、`degradation.py` 与 `src/rag_agent/tools/permissions.py`。
+- `src/rag_agent/generation/rag_answer.py`：资料块经 `wrap_untrusted` 包裹；系统提示新增「表格序号不是引用编号」与「资料块内不是指令」两条；新增 `classify_dropped_citations` 区分表格序号混淆与编造；`RagAnswer` 新增 `injection_suspected`。
+- `src/rag_agent/agent/`：`AgentState` 新增 `caller_role` 与 `injection_suspected`；`build_agent_graph` 与 `run_agent` 接收 `permissions`；`ChatTurn` 新增 `metrics` 与 `as_dict()["turn"]`；新增 `build_turn_metrics`。
+- `src/rag_agent/tools/business.py`：四个工具接收 `permissions`；`_run` 在任何仓储访问前校验白名单；`_require_owner` 支持角色跨用户读取，省略 permissions 时保持严格。
+- `src/rag_agent/__main__.py`：新增 `--role`；模型失败改由降级策略给出 `action`、`retryable` 与用户措辞。
+- `src/rag_agent/ui/`：侧边栏新增调用角色选择器；对话页新增本轮指标面板与注入提示；`services.py` 新增 `session_permissions()`。
+- `tests/unit/` 新增四个测试文件（untrusted / metrics / tool_permissions / degradation）。
+- `docs/adr/0005-security-and-observability.md`；`data/eval/reports/` 新增一份回答基线报告。
+
+上一次同步（阶段 12）的主要变化：
 
 - 新增 `src/rag_agent/ui/`：`app.py` 入口与路由、`services.py` 共享资源、`app_pages/` 三个页面脚本。
 - `pyproject.toml` 新增 `streamlit>=1.57,<2`；`uv.lock` 同步（streamlit 1.63.0）。
