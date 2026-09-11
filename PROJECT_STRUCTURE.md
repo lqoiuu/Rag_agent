@@ -495,10 +495,10 @@ rag-agent-assistant/
 
 阶段 11 证据（2026-09-11 实际执行）：
 
-- 代码提交：`3f9fe05`（22 个文件，+2500 / −97）、`f5238f3`（URI 目标解析修复）；提交时受控文件 120 个。
-- `ruff check`：All checks passed；`ruff format --check`：109 files already formatted。
+- 代码提交：`3f9fe05`（22 个文件，+2500 / −97）、`f5238f3`（URI 目标解析修复）、`5799bff`（设备号确定性抽取）；提交时受控文件 120 个。
+- `ruff check`：All checks passed；`ruff format --check`：111 files already formatted。
 - `mypy`（strict，files = ["src"]）：Success: no issues found in 52 source files。
-- `pytest`：**404 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
+- `pytest`：**407 passed, 2 skipped**（在 DSH 沙箱内一次性跑完全部用例，0 failed）。
 - 真实模型端到端验收（离线脚本连续调用 CLI，真实 32 页说明书 34 个分片的索引）：
 
   | 场景 | 退出码 | 关键结果 |
@@ -524,6 +524,14 @@ rag-agent-assistant/
 2. **隐式事务与 `BEGIN IMMEDIATE` 相遇**：Python 的 `sqlite3` 会在一条 `SELECT` 后打开隐式事务，导致「cannot start a transaction within a transaction」，因此写事务前先提交已打开的事务。
 3. **待确认节点后的条件边会把暂停点吃掉**：若在边上再判断一次 `confirmation`，未确认时会走 END，`ticket_create` 根本不被执行，`interrupt()` 也就永远不会触发。改为无条件边后，确认与否完全由节点内的暂停决定。
 4. **两个类对「数据库目标」的解析不一致**（提交 `f5238f3` 修复）：`SQLiteCheckpointer` 用 `uri=True` 连接，而 `ConversationStore` 没有，于是 `file:name?mode=memory&cache=shared` 这样的目标被后者当成磁盘上的字面文件名，两者静默使用了不同的数据库——不会报错，只是登记表看起来永远是空的。这是跑新测试时由项目根目录反复出现的空文件 `file` 暴露出来的，现已统一为 `uri=True`，并补了一条跨类回归测试。
+5. **设备查询只认命令行参数，不认消息文本**（已修复）：`device` 节点原本只读 `state["device_id"]`，该字段仅由 `--device-id` 写入，因此「D2002 还在保修吗」在消息里说出来时，节点会退化成「列出该用户全部设备」。已加入确定性抽取：调用方参数优先，其次从**当前消息**、再次从**对话窗口**里取形如 `D` + 数字的设备号；抽取结果不做归属预校验，直接交给工具，因此他人设备仍然是 `permission_denied` 而不是被静默跳过。
+
+**阶段 12 之前需要先处理的已知回归（本阶段实测发现，尚未修复）**：
+
+- 现象：同一句追问「那它的保修期是多久」，**没有历史时 3/3 判为 `device` 并正常回答**；**前面有一轮设备对话后 3/3 判为 `knowledge` 并拒答**。也就是说，把最近对话放进 Prompt 之后，设备追问反而退化成拒答。方向是稳定的，不是随机波动。
+- 已排除的原因：不是检索的问题（`search` 显示含答案的第 27 页在 top-5 内）；也不是设备号丢失（确定性抽取已在两个场景下都取到 `D2002`）。
+- 根因：`classify` 每一轮都从零由模型判定意图，历史进入 Prompt 后模型的判定发生了改变。
+- 建议的修法（需学习者确认后再做，属于路由规则的改动）：当模型判为与设备无关、但**本轮能从对话窗口解析出设备号**且当前消息是指代式追问时，由代码把意图改判为 `device`，并在轨迹里记录这次改判；规则只允许向 `device` 收敛，不允许把知识问题改判成设备问题。改完必须用同一批追问做前后对照，而不是凭感觉。
 
 已知环境注意事项：
 
