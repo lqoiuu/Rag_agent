@@ -1,0 +1,55 @@
+services:
+  rag-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      RAG_AGENT_ENVIRONMENT: production
+      RAG_AGENT_LOG_LEVEL: ${RAG_AGENT_LOG_LEVEL:-INFO}
+      RAG_AGENT_DATA_DIR: /app/data
+      RAG_AGENT_CHROMA_DIR: /app/data/chroma
+      RAG_AGENT_SQLITE_PATH: /app/data/runtime/rag_agent.sqlite3
+      RAG_AGENT_CHECKPOINT_PATH: /app/data/runtime/rag_agent.sqlite3
+      RAG_AGENT_QWEN_API_KEY: ${RAG_AGENT_QWEN_API_KEY:-}
+      RAG_AGENT_QWEN_BASE_URL: ${RAG_AGENT_QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      RAG_AGENT_QWEN_CHAT_MODEL: ${RAG_AGENT_QWEN_CHAT_MODEL:-qwen-plus}
+      RAG_AGENT_QWEN_EMBEDDING_MODEL: ${RAG_AGENT_QWEN_EMBEDDING_MODEL:-text-embedding-v4}
+      RAG_AGENT_MODEL_TIMEOUT_SECONDS: ${RAG_AGENT_MODEL_TIMEOUT_SECONDS:-30}
+      RAG_AGENT_MODEL_MAX_RETRIES: ${RAG_AGENT_MODEL_MAX_RETRIES:-2}
+      RAG_AGENT_RETRIEVAL_TOP_K: ${RAG_AGENT_RETRIEVAL_TOP_K:-5}
+      RAG_AGENT_RETRIEVAL_THRESHOLD: ${RAG_AGENT_RETRIEVAL_THRESHOLD:-0.35}
+      RAG_AGENT_CONVERSATION_WINDOW_SIZE: ${RAG_AGENT_CONVERSATION_WINDOW_SIZE:-8}
+    volumes:
+      - rag_agent_raw:/app/data/raw
+      - rag_agent_chroma:/app/data/chroma
+      - rag_agent_runtime:/app/data/runtime
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  rag_agent_raw:
+  rag_agent_chroma:
+  rag_agent_runtime:

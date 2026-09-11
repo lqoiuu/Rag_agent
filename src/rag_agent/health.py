@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import asdict, dataclass
 from importlib import import_module
@@ -67,11 +68,21 @@ def _module_imports() -> dict[str, str]:
     return imports
 
 
+def _expected_virtual_environment() -> Path:
+    configured = os.getenv("UV_PROJECT_ENVIRONMENT")
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path.resolve()
+    return (PROJECT_ROOT / ".venv").resolve()
+
+
 def collect_health() -> HealthReport:
     dependencies = _distribution_versions()
     imports = _module_imports()
     prefix = Path(sys.prefix).resolve()
-    expected_venv = (PROJECT_ROOT / ".venv").resolve()
+    expected_venv = _expected_virtual_environment()
     checks = {
         "python_3_13": sys.version_info[:2] == (3, 13),
         "virtual_environment_active": sys.prefix != sys.base_prefix,

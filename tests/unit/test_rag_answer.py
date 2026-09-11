@@ -10,12 +10,14 @@ from ingestion_test_support import make_document_chunks, make_vector_store
 from rag_agent.domain.citation import Citation
 from rag_agent.domain.retrieval import RetrievalHit
 from rag_agent.generation import (
+    CITATION_REPAIR_SYSTEM_PROMPT,
     RAG_SYSTEM_PROMPT,
     AnswerStatus,
     RefusalCause,
     answer_with_context,
     build_context,
     classify_dropped_citations,
+    parse_citation_repair,
     parse_model_payload,
 )
 from rag_agent.observability import EVIDENCE_END, EVIDENCE_START
@@ -79,11 +81,17 @@ def test_grounded_answer_keeps_valid_citations() -> None:
 
 
 def test_invented_citation_ids_are_dropped_and_reported() -> None:
-    model = scripted(answered_payload(citations=[1, 9, 0, -1]))
+    model = scripted(
+        answered_payload(
+            answer="先断电并清理主刷。[1] 不要引用不存在的资料。[9]",
+            citations=[1, 9, 0, -1],
+        )
+    )
 
     answer = answer_with_context(CONTENTS[0], retriever=make_retriever(*CONTENTS), chat_model=model)
 
     assert answer.answered is True
+    assert answer.text == "先断电并清理主刷。[1] 不要引用不存在的资料。"
     assert [citation.citation_id for citation in answer.citations] == [1]
     assert answer.dropped_citations == (9, 0, -1)
 
@@ -98,6 +106,143 @@ def test_answer_without_any_valid_citation_is_refused() -> None:
     assert "引用编号" in answer.reason
     assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
     assert answer.dropped_citations == (7,)
+    assert model.call_count == 1
+    assert answer.citation_repair_attempted is False
+
+
+def test_table_number_citation_is_repaired_by_a_bounded_second_call() -> None:
+    first = answered_payload(answer="主刷缠绕时需要清理。[8]", citations=[8])
+    model = FakeChatModel(
+        [
+            json.dumps(first, ensure_ascii=False),
+            json.dumps({"source_labels": ["SOURCE-A"]}, ensure_ascii=False),
+        ],
+        latency_ms=12.5,
+    )
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.status is AnswerStatus.ANSWERED
+    assert answer.text == "主刷缠绕时需要清理。 [1]"
+    assert [citation.citation_id for citation in answer.citations] == [1]
+    assert answer.dropped_citations == (8,)
+    assert answer.citation_repair_attempted is True
+    assert answer.citation_repaired is True
+    assert answer.attempts == 2
+    assert answer.latency_ms == 25.0
+    assert model.call_count == 2
+    assert model.last_messages is not None
+    assert model.last_messages[0].content == CITATION_REPAIR_SYSTEM_PROMPT
+    assert "允许的资料标签只有：SOURCE-A, SOURCE-B, SOURCE-C" in model.last_messages[1].content
+    assert "[1] 来源：" not in model.last_messages[1].content
+
+
+def test_failed_table_number_repair_stays_refused() -> None:
+    first = answered_payload(answer="主刷缠绕时需要清理。", citations=[8])
+    model = FakeChatModel(
+        [
+            json.dumps(first, ensure_ascii=False),
+            json.dumps({"source_labels": ["SOURCE-Z"]}, ensure_ascii=False),
+        ]
+    )
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
+    assert answer.citation_repair_attempted is True
+    assert answer.citation_repaired is False
+    assert model.call_count == 2
+
+
+def test_repair_rejects_a_mixed_valid_and_unknown_label_set() -> None:
+    first = answered_payload(answer="主刷缠绕时需要清理。", citations=[8])
+    model = FakeChatModel(
+        [
+            json.dumps(first, ensure_ascii=False),
+            json.dumps({"source_labels": ["SOURCE-A", "SOURCE-Z"]}, ensure_ascii=False),
+        ]
+    )
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
+    assert answer.citation_repair_attempted is True
+    assert answer.citation_repaired is False
+    assert model.call_count == 2
+
+
+def test_repair_provider_failure_keeps_the_initial_refusal() -> None:
+    first = json.dumps(
+        answered_payload(answer="主刷缠绕时需要清理。", citations=[8]),
+        ensure_ascii=False,
+    )
+
+    def responder(_messages: object) -> str:
+        if model.call_count == 1:
+            return first
+        raise ModelTimeoutError("repair timed out")
+
+    model = FakeChatModel(responder=responder)
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
+    assert answer.citation_repair_attempted is True
+    assert answer.citation_repaired is False
+    assert model.call_count == 2
+
+
+def test_mixed_valid_and_table_number_citations_are_reselected() -> None:
+    first = answered_payload(answer="主刷缠绕时需要清理。", citations=[2, 8])
+    model = FakeChatModel(
+        [
+            json.dumps(first, ensure_ascii=False),
+            json.dumps({"source_labels": ["SOURCE-A"]}, ensure_ascii=False),
+        ]
+    )
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.status is AnswerStatus.ANSWERED
+    assert [citation.citation_id for citation in answer.citations] == [1]
+    assert answer.dropped_citations == (8,)
+    assert answer.citation_repair_attempted is True
+    assert answer.citation_repaired is True
+    assert model.call_count == 2
+
+
+def test_mixed_table_and_invented_citations_are_not_repaired() -> None:
+    model = scripted(answered_payload(answer="主刷缠绕时需要清理。", citations=[8, 99]))
+
+    answer = answer_with_context(
+        "主刷缠绕怎么办？",
+        retriever=make_retriever("故障排查表：8 主刷缠绕时需要清理", *CONTENTS[1:]),
+        chat_model=model,
+    )
+
+    assert answer.refusal_cause is RefusalCause.NO_VALID_CITATION
+    assert answer.citation_repair_attempted is False
+    assert model.call_count == 1
 
 
 def test_insufficient_status_is_refused_with_the_model_reason() -> None:
@@ -333,6 +478,15 @@ def test_parse_model_payload_rejects_non_json() -> None:
     assert parse_model_payload("[1, 2, 3]") is None
 
 
+def test_parse_citation_repair_requires_source_labels() -> None:
+    assert parse_citation_repair('{"source_labels": ["source-b", "A"]}') == (
+        "SOURCE-B",
+        "SOURCE-A",
+    )
+    assert parse_citation_repair('{"answer": "unchanged"}') is None
+    assert parse_citation_repair("not json") is None
+
+
 def test_answer_serialises_for_reports() -> None:
     model = scripted(answered_payload())
 
@@ -345,6 +499,8 @@ def test_answer_serialises_for_reports() -> None:
     assert isinstance(payload["citations"], list)
     assert payload["citations"][0]["citation_id"] == 1  # type: ignore[index]
     assert payload["evidence"][0]["rank"] == 1  # type: ignore[index]
+    assert payload["citation_repair_attempted"] is False
+    assert payload["citation_repaired"] is False
 
 
 def test_provider_failure_propagates() -> None:

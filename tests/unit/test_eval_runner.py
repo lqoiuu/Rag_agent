@@ -143,8 +143,12 @@ def test_answer_run_measures_citations_and_faithfulness() -> None:
     assert report.mode == "answer"
     assert report.summary.answer_rate == 1.0
     assert report.summary.citation_correct_rate == 1.0
+    assert report.summary.citation_repair_attempts == 0
+    assert report.summary.citation_repairs == 0
     assert report.summary.mean_faithfulness == 1.0
     assert report.cases[0].citation_pages == (27,)
+    assert report.cases[0].citation_repair_attempted is False
+    assert report.cases[0].citation_repaired is False
 
 
 def test_answer_run_counts_a_wrong_citation() -> None:

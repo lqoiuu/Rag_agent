@@ -91,6 +91,8 @@ class CaseOutcome:
     latency_ms: float | None = None
     answer_excerpt: str = ""
     raw_excerpt: str = ""
+    citation_repair_attempted: bool = False
+    citation_repaired: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -113,6 +115,8 @@ class CaseOutcome:
             "latency_ms": self.latency_ms,
             "answer_excerpt": self.answer_excerpt,
             "raw_excerpt": self.raw_excerpt,
+            "citation_repair_attempted": self.citation_repair_attempted,
+            "citation_repaired": self.citation_repaired,
         }
 
 
@@ -133,6 +137,10 @@ class EvaluationSummary:
     mean_faithfulness: float | None
     mean_best_score: float | None
     mean_margin: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    citation_repair_attempts: int | None
+    citation_repairs: int | None
     refusal_breakdown: dict[str, int]
 
     def as_dict(self) -> dict[str, object]:
@@ -150,6 +158,10 @@ class EvaluationSummary:
             "mean_faithfulness": self.mean_faithfulness,
             "mean_best_score": self.mean_best_score,
             "mean_margin": self.mean_margin,
+            "latency_p50_ms": self.latency_p50_ms,
+            "latency_p95_ms": self.latency_p95_ms,
+            "citation_repair_attempts": self.citation_repair_attempts,
+            "citation_repairs": self.citation_repairs,
             "refusal_breakdown": self.refusal_breakdown,
         }
 
@@ -184,12 +196,17 @@ def summarize(outcomes: Sequence[CaseOutcome], *, mode: str) -> EvaluationSummar
                 [item.best_score for item in scored if item.best_score is not None]
             ),
             mean_margin=_mean([item.margin for item in scored if item.margin is not None]),
+            latency_p50_ms=None,
+            latency_p95_ms=None,
+            citation_repair_attempts=None,
+            citation_repairs=None,
             refusal_breakdown=breakdown,
         )
 
     answered_answerable = [item for item in answerable if item.answered is True]
     correct_citations = [item for item in answered_answerable if item.citation_correct is True]
     decisions = sum(1 for item in outcomes if _decided_correctly(item))
+    latencies = [item.latency_ms for item in outcomes if item.latency_ms is not None]
 
     return EvaluationSummary(
         mode=mode,
@@ -207,6 +224,10 @@ def summarize(outcomes: Sequence[CaseOutcome], *, mode: str) -> EvaluationSummar
         ),
         mean_best_score=_mean([item.best_score for item in scored if item.best_score is not None]),
         mean_margin=_mean([item.margin for item in scored if item.margin is not None]),
+        latency_p50_ms=_percentile(latencies, 0.50),
+        latency_p95_ms=_percentile(latencies, 0.95),
+        citation_repair_attempts=sum(1 for item in outcomes if item.citation_repair_attempted),
+        citation_repairs=sum(1 for item in outcomes if item.citation_repaired),
         refusal_breakdown=breakdown,
     )
 
@@ -239,6 +260,19 @@ def _mean_bool(values: Iterable[bool]) -> float | None:
     if not items:
         return None
     return round(sum(1 for item in items if item) / len(items), 4)
+
+
+def _percentile(values: Iterable[float], quantile: float) -> float | None:
+    """Return a linearly interpolated percentile from measured values."""
+
+    items = sorted(values)
+    if not items:
+        return None
+    position = (len(items) - 1) * quantile
+    lower = int(position)
+    upper = min(lower + 1, len(items) - 1)
+    fraction = position - lower
+    return round(items[lower] + (items[upper] - items[lower]) * fraction, 1)
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:

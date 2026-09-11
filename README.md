@@ -2,7 +2,7 @@
 
 这是一个面向扫地机器人售后场景的学习与作品集项目。知识资料可以来自有权使用的说明书、维修手册和 FAQ；用户、设备、订单及工单接口均为本地模拟实现，不代表真实企业系统。
 
-当前状态：阶段 13（安全、可观测性与失败降级）已完成并通过验收。
+当前状态：阶段 14（引用修复、端到端验收与 Docker 交付）已完成并通过验收。
 
 ## 当前技术基线
 
@@ -16,6 +16,7 @@
 - pydantic-settings
 - 会话持久化使用 langgraph-checkpoint 的 `BaseCheckpointSaver` 与标准库 `sqlite3` 自实现，不额外引入 checkpoint 后端依赖
 - pytest、Ruff、mypy
+- Docker Compose 提供可复现的非 root 容器交付
 
 精确依赖版本保存在 uv.lock。真实密钥只允许放入本地 .env，不能提交到 Git。
 
@@ -40,13 +41,51 @@ uv sync
 
 真实密钥只写入本地 `.env`（从 `.env.example` 复制，已被 `.gitignore` 忽略）。
 
-## 启动界面
+## 启动与关闭
+
+以下命令都在 `rag-agent-assistant/` 项目根目录执行。Docker 方式用于完整交付验收，本地方式适合开发调试；两种方式不要同时占用 8501 端口。
+
+### Docker Compose（推荐）
+
+前置条件是 Docker Desktop 的 Linux Engine 已启动，且项目根目录存在本地 `.env`。Compose 只把配置注入运行中的容器，不会把 `.env` 或真实密钥复制进镜像。只使用 `docker compose config --quiet` 做校验；不带 `--quiet` 会把解析后的环境变量（包括密钥）打印到终端。
+
+首次启动或代码发生变化时执行：
 
 ```powershell
-uv run streamlit run src/rag_agent/ui/app.py
+docker compose config --quiet
+docker compose up --detach --build --wait
+docker compose ps
+docker compose exec --no-TTY rag-agent rag-agent health
 ```
 
-浏览器打开终端输出的地址（默认 `http://localhost:8501`）。界面分三页：
+成功时 `docker compose ps` 显示容器为 `healthy`，应用健康输出中的 `status` 为 `ok`。浏览器访问 `http://127.0.0.1:8501`；端口只绑定到本机，不对局域网公开。当前已验证镜像构建、服务启动、容器健康检查与三页界面渲染。容器以 UID/GID 10001 运行，应用根目录只读，只有三个数据卷和临时 `/tmp` 可写。
+
+关闭并移除容器及项目网络：
+
+```powershell
+docker compose down
+```
+
+该命令不会删除保存原始资料、Chroma 索引和 SQLite 状态的三个命名卷。除非明确要清空全部容器数据，否则不要增加 `--volumes` 参数。
+
+若受限网络导致 BuildKit 首次获取 Docker Hub 令牌失败，应先在 Docker Desktop 中配置可用代理，再预拉取基础镜像后重建：
+
+```powershell
+docker pull python:3.13-slim
+docker compose build
+```
+
+### 本地虚拟环境
+
+完成前面的 `uv sync` 并配置本地 `.env` 后启动：
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run src/rag_agent/ui/app.py
+```
+
+浏览器打开终端输出的地址（默认 `http://localhost:8501`）。关闭时回到运行该命令的终端按 `Ctrl+C`；这只停止 Streamlit 进程，不会删除 `data/` 下的原始资料、索引或 SQLite 状态。
+
+界面分三页：
 
 - **对话**：流式生成、引用来源、工具调用步骤，以及待确认写操作的「确认 / 取消」按钮。
 - **知识库**：上传（TXT / Markdown / PDF）后立即入库，可查看已入库文档、删除、重建索引。
@@ -63,6 +102,9 @@ uv run streamlit run src/rag_agent/ui/app.py
 - pyproject.toml：项目元数据、直接依赖和工具配置。
 - uv.lock：完整且精确的依赖版本。
 - .env.example：环境变量示例，不包含真实密钥。
+- Dockerfile：Python 3.13、锁定依赖、非 root 用户和 Streamlit 启动入口。
+- compose.yaml：端口、健康检查、环境变量与三个持久卷。
+- .dockerignore：排除密钥、虚拟环境、测试报告和本地运行数据。
 
 ## 当前可用能力
 
@@ -108,6 +150,8 @@ uv run streamlit run src/rag_agent/ui/app.py
 - 工具权限白名单与角色：`end_user` 只能读自己的记录，`support_agent` 可跨用户读取；角色由调用方声明（CLI `--role`、界面选择器），只能下调，未知值落回最严格角色。
 - 运行期指标：本轮总耗时、检索命中数与最高分、工具调用与失败码、注入疑点，`rag-agent chat` 输出与界面指标面板都能看到。
 - 统一降级策略：模型、工具与检索失败映射为 retry / answer_partial / refuse / report_error 四种动作与面向用户的措辞，失败绝不伪装成回答。
+- 引用二次校验与修复：模型只选择 `SOURCE-A` 等临时来源标签，系统再映射回已检索且已校验的引用编号；不会重写答案事实，也不会修复混入虚构来源的回答。
+- Docker Compose 交付：Python 3.13 镜像以 UID 10001 非 root 用户运行，原始资料、Chroma 与 SQLite 分卷持久化，并提供 Streamlit 健康检查。
 
 ## 模拟数据边界
 
@@ -119,18 +163,19 @@ uv run streamlit run src/rag_agent/ui/app.py
 |---|---|---|
 | Recall@5 | 0.9535 | 43 条可回答问题命中 41 条（按页粒度） |
 | MRR | 0.8205 | 正确分片平均排在较前位置 |
-| 回答率 | 0.814 | 阶段 13 引用规则调整后（此前 0.7907） |
-| 引用正确率 | 0.7429 | 口径：已作答问题中引用页码**全部**落在预期页内；回答变多会拉低它 |
+| 回答率 | 0.9302 | 阶段 14 两次 49 条 Qwen 评测结果相同；阶段 13 基线为 0.8140 |
+| 引用正确率 | 0.8250 | 第二次阶段 14 评测；第一次为 0.7750，阶段 13 基线为 0.7429 |
 | 拒答正确率 | 1.0 | 6 条不可回答问题全部正确拒答 |
-| 决策正确率 | 0.8367 | 该答则答、该拒则拒的比例 |
-| 忠实度（代理） | 0.5508 | 答案为引用分片全文覆盖的比例，属弱指标 |
+| 决策正确率 | 0.9388 | 阶段 14 两次结果相同；阶段 13 基线为 0.8367 |
+| 引用修复 | 6 / 6 | 第二次评测全部修复成功；第一次为 5 / 5 |
+| 忠实度（代理） | 0.5769 | 第二次评测结果，答案为引用分片全文覆盖的比例，属弱指标 |
+| 回答耗时 P50 | 1892.8 ms | 第二次阶段 14 的 49 条逐条实测耗时，线性插值分位数 |
+| 回答耗时 P95 | 3910.2 ms | 同上；包含首次回答及按条件触发的引用校对耗时 |
 
-数据来自 `data/eval/reports/` 下的报告文件，可用同一条命令复现；检索指标确定可重复，回答指标存在运行间波动。**已知未解决**：6 条「故障排查」类问题因把说明书表格序号当成引用编号而被拒答，阶段 13 的提示词规则只解决其中 1 条，余 5 条留待阶段 14 用实验性修法处理。
+阶段 13 基线来自 `answer-20260911T080858Z.json`，阶段 14 两次对照来自 `answer-20260911T090138Z.json` 与 `answer-20260911T090839Z.json`。检索指标确定可重复，回答指标存在模型运行波动；第二次引用正确率高于第一次，部分来自 q21、q22 的模型输出变化，不能全部归因于修复代码。q34 修复选择的第 25 页与第 8 页分别支撑答案中的不同事实，但评测集只允许第 25 页，因此严格口径仍判为引用错误。
 
 ## 尚未实现
 
-- Docker 与最终交付（阶段 14）。
-- **引用越界的实验性修复**：提示词规则只解决 6 条中的 1 条，余 5 条需在阶段 14 用可对照的实验处理。
 - 界面身份认证与更细的写权限：角色与用户编号都是自述，任何访问者都能填。
 - token 用量未并入指标：它记录在日志里，尚未写回图状态。
 - 矢量轮廓（文字转曲线）PDF 的文本提取，需要 OCR，当前明确不支持。

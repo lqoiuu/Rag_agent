@@ -37,7 +37,7 @@ from rag_agent.generation import (
     RagAnswer,
     answer_question,
     answer_with_context,
-    finalize_answer,
+    finalize_answer_with_repair,
     prepare_answer,
     stream_raw_answer,
 )
@@ -464,9 +464,10 @@ def _stream_grounded_answer(
         print(delta, end="", flush=True)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     print()
-    return finalize_answer(
+    return finalize_answer_with_repair(
         prepared,
         "".join(deltas),
+        chat_model=chat_model,
         model=chat_model.model_name,
         latency_ms=elapsed_ms,
     )

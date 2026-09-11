@@ -1,7 +1,14 @@
 from pathlib import Path
 
+import pytest
+
 from rag_agent.config import PROJECT_ROOT
-from rag_agent.health import CORE_DISTRIBUTIONS, CORE_MODULES, collect_health
+from rag_agent.health import (
+    CORE_DISTRIBUTIONS,
+    CORE_MODULES,
+    _expected_virtual_environment,
+    collect_health,
+)
 
 
 def test_health_reports_python_and_core_dependencies() -> None:
@@ -15,3 +22,20 @@ def test_health_reports_python_and_core_dependencies() -> None:
     assert all(version != "not-installed" for version in report.dependencies.values())
     assert set(report.imports) == set(CORE_MODULES)
     assert all(result == "ok" for result in report.imports.values())
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (".container-venv", PROJECT_ROOT / ".container-venv"),
+        (str(PROJECT_ROOT / "absolute-venv"), PROJECT_ROOT / "absolute-venv"),
+    ],
+)
+def test_expected_virtual_environment_honors_uv_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    expected: Path,
+) -> None:
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", configured)
+
+    assert _expected_virtual_environment() == expected.resolve()

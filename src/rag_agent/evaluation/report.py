@@ -17,6 +17,10 @@ _METRIC_LABELS: tuple[tuple[str, str], ...] = (
     ("mean_faithfulness", "忠实度（代理指标）"),
     ("mean_best_score", "平均最高相似度"),
     ("mean_margin", "平均前两名分差"),
+    ("latency_p50_ms", "回答耗时 P50（ms）"),
+    ("latency_p95_ms", "回答耗时 P95（ms）"),
+    ("citation_repair_attempts", "引用校对尝试数"),
+    ("citation_repairs", "引用校对成功数"),
 )
 
 
@@ -62,8 +66,9 @@ def to_markdown(report: EvaluationReport) -> str:
             "",
             "## 逐条结果",
             "",
-            "| 用例 | 类别 | 可回答 | 首个命中 | 命中 | 回答 | 引用页码 | 引用正确 | 忠实度 |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| 用例 | 类别 | 可回答 | 首个命中 | 命中 | 回答 | "
+            "引用页码 | 引用正确 | 引用校对 | 忠实度 |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for case in report.cases:
@@ -80,9 +85,14 @@ def to_markdown(report: EvaluationReport) -> str:
         )
         score = "—" if case.faithfulness is None else case.faithfulness
         able = "是" if case.answerable else "否"
+        repair = (
+            "成功"
+            if case.citation_repaired
+            else ("失败" if case.citation_repair_attempted else "—")
+        )
         lines.append(
             f"| {case.case_id} | {case.category} | {able} | {rank} | {hit} | {answered} | "
-            f"{pages} | {correct} | {score} |"
+            f"{pages} | {correct} | {repair} | {score} |"
         )
 
     problems = [

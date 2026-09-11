@@ -129,6 +129,7 @@ def test_answer_summary_separates_citation_and_refusal_quality() -> None:
             citation_pages=(27,),
             citation_correct=True,
             faithfulness=0.9,
+            latency_ms=1000.0,
         ),
         CaseOutcome(
             case_id="b",
@@ -138,6 +139,9 @@ def test_answer_summary_separates_citation_and_refusal_quality() -> None:
             citation_pages=(3,),
             citation_correct=False,
             faithfulness=0.4,
+            latency_ms=2000.0,
+            citation_repair_attempted=True,
+            citation_repaired=True,
         ),
         CaseOutcome(
             case_id="c",
@@ -145,6 +149,7 @@ def test_answer_summary_separates_citation_and_refusal_quality() -> None:
             answerable=False,
             answered=False,
             refusal_cause="model_insufficient",
+            latency_ms=3000.0,
         ),
     ]
 
@@ -155,6 +160,10 @@ def test_answer_summary_separates_citation_and_refusal_quality() -> None:
     assert summary.refusal_accuracy == 1.0
     assert summary.decision_accuracy == 1.0
     assert summary.mean_faithfulness == 0.65
+    assert summary.latency_p50_ms == 2000.0
+    assert summary.latency_p95_ms == 2900.0
+    assert summary.citation_repair_attempts == 1
+    assert summary.citation_repairs == 1
     assert summary.refusal_breakdown == {"model_insufficient": 1}
 
 
@@ -185,4 +194,8 @@ def test_summary_serialises_for_reports() -> None:
     assert payload["mode"] == "retrieval"
     assert payload["total"] == 0
     assert payload["recall_at_k"] is None
+    assert payload["latency_p50_ms"] is None
+    assert payload["latency_p95_ms"] is None
+    assert payload["citation_repair_attempts"] is None
+    assert payload["citation_repairs"] is None
     assert payload["refusal_breakdown"] == {}

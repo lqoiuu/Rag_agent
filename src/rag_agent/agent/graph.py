@@ -41,7 +41,7 @@ from rag_agent.agent.state import (
 from rag_agent.generation.rag_answer import (
     DEFAULT_MAX_CONTEXT_CHARS,
     RagAnswer,
-    finalize_answer,
+    finalize_answer_with_repair,
     prepare_answer,
     stream_raw_answer,
 )
@@ -557,11 +557,13 @@ def stream_chat_turn(
         deltas.append(delta)
         yield delta, None
 
-    answer = finalize_answer(
+    answer = finalize_answer_with_repair(
         prepared,
         "".join(deltas),
+        chat_model=chat_model,
         model=chat_model.model_name,
         latency_ms=(time.perf_counter() - started) * 1000.0,
+        temperature=temperature,
     )
     yield "", _stream_turn(thread_id, window, preferences, answer, checkpoints_before)
 

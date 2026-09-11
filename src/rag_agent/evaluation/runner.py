@@ -118,6 +118,8 @@ def run_answer_evaluation(
                 latency_ms=answer.latency_ms,
                 answer_excerpt=answer.text[:160],
                 raw_excerpt="" if answer.answered else answer.raw_output[:200],
+                citation_repair_attempted=answer.citation_repair_attempted,
+                citation_repaired=answer.citation_repaired,
             )
         )
 

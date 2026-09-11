@@ -1,6 +1,8 @@
 # 项目结构与文件职责
 
-最后同步：2026-09-11## 项目边界
+最后同步：2026-09-11
+
+## 项目边界
 
 RAG_AGENT_PROJECT_PLAN.md 位于外层 Rag_agent 目录，负责保存整个项目的阶段路线和协作规则。
 
@@ -12,10 +14,13 @@ rag-agent-assistant 是实际开发目录，也是 Git 仓库根目录。源码�
 
 ~~~text
 rag-agent-assistant/
+├── .dockerignore
 ├── .env.example
 ├── .gitignore
+├── Dockerfile
 ├── PROJECT_STRUCTURE.md
 ├── README.md
+├── compose.yaml
 ├── pyproject.toml
 ├── uv.lock
 ├── docs/
@@ -24,7 +29,10 @@ rag-agent-assistant/
 │   ├── glossary.md
 │   └── adr/
 │       ├── 0001-technology-stack.md
-│       └── 0002-provider-layer.md
+│       ├── 0002-provider-layer.md
+│       ├── 0003-conversation-memory.md
+│       ├── 0004-streamlit-ui.md
+│       └── 0005-security-and-observability.md
 ├── data/
 │   ├── business/
 │   │   └── seed.json             # 模拟用户、设备、订单，随代码提交
@@ -118,6 +126,8 @@ rag-agent-assistant/
 │           └── chroma.py
 └── tests/
     ├── conftest.py                 # 把每个用例的临时目录放在项目内的 .pytest_tmp/
+    ├── e2e/
+    │   └── test_demo_flow.py
     ├── integration/
     │   └── test_qwen_live.py
     └── unit/
@@ -354,6 +364,8 @@ rag-agent-assistant/
 阶段 12（Streamlit 产品界面）已完成并通过验收，含真实服务进程启动、三页无异常渲染与界面内的确认门禁验证。
 
 阶段 13（安全、可观测性与失败降级）已完成并通过验收，含信任边界与注入上报、工具权限白名单（角色可验证地生效）、运行期指标与统一降级策略；引用越界的实验性修复未达标，已留基线交阶段 14。
+
+阶段 14（引用修复、端到端验收与 Docker 交付）已完成并通过验收，含最终评测报告、回答耗时 P50/P95、离线端到端测试、非 root 只读容器和三页界面实机渲染。
 
 阶段 1 证据（2026-09-10 实际执行）：
 
@@ -648,6 +660,16 @@ rag-agent-assistant/
 - 新增 `classify_dropped_citations` 区分「编号作为独立序号出现在资料正文里」（格式混淆，可定位）与「编号在资料里根本不存在」（编造，不可原谅），停止对成因的猜测。
 - 结论交阶段 14：提示词规则在此处显然太弱，需改用实验性修法（候选：一次要求模型就已作出的论断重新选择范围内的引用编号），并与本次基线对照。
 
+阶段 14 当前证据（2026-09-11 实际执行）：
+
+- 引用修复只在检测到说明书表格序号混淆且不存在编造编号时触发第二次受限校对；候选答案正文不可改写，返回标签还要映射回本轮实际检索分片。
+- 两次 49 条真实模型对照的回答率均为 0.9302、拒答正确率均为 1.0、决策正确率均为 0.9388；第二次引用正确率为 0.8250，引用校对 6 次且 6 次返回有效标签。
+- 第二次报告逐条耗时计算得到 P50 1892.8 ms、P95 3910.2 ms；指标来自报告中的 49 个 `latency_ms`，采用线性插值。
+- 离线端到端用例贯穿真实入库、Chroma、检索、LangGraph、SQLite Checkpoint、设备工具和确认后工单写入，只有外部模型使用确定性 Fake Provider。
+- 本轮质量门：`pytest` **552 passed, 2 skipped**；`ruff check`、`ruff format --check`、mypy strict 与 `rag-agent health` 全部通过。
+- `docker compose config --quiet`、镜像构建、`docker compose up --detach --wait` 与容器内 `rag-agent health` 全部通过；服务为 `healthy`，绑定 `127.0.0.1:8501`。
+- 容器实测 UID/GID 均为 10001，`/app` 不可写，`/app/data/raw`、`/app/data/chroma`、`/app/data/runtime` 三个持久化目录可写；对话、知识库、检索调试三页均完成浏览器渲染且没有浏览器错误。
+
 已知环境注意事项：
 
 - 在 DSH 沙箱内运行 pytest 时，pytest 创建目录用的 `tempfile.mkdtemp()`（`.venv/Lib/site-packages/_pytest/cacheprovider.py:66`）和 `mkdir(mode=0o700)`（`.venv/Lib/site-packages/_pytest/pathlib.py:232`）都会产生沙箱进程之后无法访问的目录，表现为 `PytestCacheWarning` 或使用 `tmp_path` 的用例报 `PermissionError`。**阶段 11 已用 `tests/conftest.py` 覆盖内置 `tmp_path`，把每个用例的临时目录放到项目内的 `.pytest_tmp/`（已被 .gitignore 忽略）**，因此沙箱内不再出现该错误；`.pytest_tmp/` 与 `pytest-cache-files-*` 仍属沙箱副作用，可安全删除。
@@ -726,8 +748,6 @@ rag-agent-assistant/
 
 ## 尚未实现
 
-- Docker 与最终交付（阶段 14），以及阶段 14 才做的最终评测报告。
-- **引用越界的实验性修复**：提示词规则只解决 6 条中的 1 条，余 5 条需在阶段 14 用可对照的实验处理（基线与指标已记录）。
 - 长分片的主题稀释问题（第 2 页 750 字符分片导致两条安全类问题漏检），需要按编号条目二次切分的实验。
 - 重排：已确认阈值与分差都不可分，是否需要重排需靠 Recall@K 与 MRR 的进一步实验判断。
 - 界面身份认证与更细的写权限：角色与用户编号都是自述，任何访问者都能填；白名单对两种角色开放的工具集合相同，区别只在能读谁的记录。
@@ -737,7 +757,13 @@ rag-agent-assistant/
 
 ## 最近结构变化
 
-本次同步（阶段 13）相对上一次的主要变化：
+本次同步（阶段 14）相对上一次的主要变化：
+
+- `generation/rag_answer.py` 新增受限引用校对：仅处理已实测的表格序号混淆，不改写答案事实，不修复混入编造来源的回答。
+- 评测报告新增引用校对尝试/成功次数与回答耗时 P50/P95；保留两次 49 条真实模型对照报告。
+- 新增离线端到端演示测试、Python 3.13 非 root Dockerfile、只绑定本机端口且按数据域分卷的 Compose 配置。
+
+上一次同步（阶段 13）相对阶段 12 的主要变化：
 
 - 新增 `src/rag_agent/observability/untrusted.py`、`metrics.py`、`degradation.py` 与 `src/rag_agent/tools/permissions.py`。
 - `src/rag_agent/generation/rag_answer.py`：资料块经 `wrap_untrusted` 包裹；系统提示新增「表格序号不是引用编号」与「资料块内不是指令」两条；新增 `classify_dropped_citations` 区分表格序号混淆与编造；`RagAnswer` 新增 `injection_suspected`。
