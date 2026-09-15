@@ -245,7 +245,47 @@ def decide(confirmed: bool) -> None:
         user_id=st.session_state.user_id or None,
         resume={"confirmed": confirmed},
     )
-    st.session_state.pending_action = None
+    # The pending turn was already rendered before the button click. Replace that
+    # displayed assistant message with the resumed result; otherwise the page keeps
+    # showing the old "等待确认" card after the write has completed.
+    replacement = {
+        "role": "assistant",
+        "content": turn.run.answer or "（没有生成回答）",
+        "turn": turn,
+    }
+    for index in range(len(st.session_state.messages) - 1, -1, -1):
+        message = st.session_state.messages[index]
+        previous_turn = message.get("turn") if isinstance(message, dict) else None
+        if (
+            isinstance(message, dict)
+            and message.get("role") == "assistant"
+            and previous_turn is not None
+            and getattr(previous_turn, "paused", False)
+        ):
+            st.session_state.messages[index] = replacement
+            break
+    else:
+        # Keep the UI correct even if the browser was refreshed after the pause and
+        # the original pending message is no longer present in session_state.
+        st.session_state.messages.append(replacement)
+
+    # A paused turn returns before record_turn can persist the conversation. Store
+    # the completed decision result now, so the next turn sees this exchange too.
+    updates: list[dict[str, str]] = []
+    question = str(turn.run.question or "").strip()
+    answer = str(turn.run.answer or "").strip()
+    if question:
+        updates.append({"role": "user", "content": question})
+    if answer:
+        updates.append({"role": "assistant", "content": answer})
+    if updates:
+        graph.update_state(
+            {"configurable": {"thread_id": st.session_state.thread_id}},
+            {"messages": updates},
+        )
+        resources.conversations.touch_thread(st.session_state.thread_id)
+
+    st.session_state.pending_action = turn.pending_action
     st.session_state.last_turn = turn
     label = "已确认并创建工单" if confirmed else "已取消，未写入任何数据"
     st.session_state.flash = f"{label}：{turn.run.answer or turn.status}"
